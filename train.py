@@ -116,7 +116,6 @@ def calculate_reward(query, response, response_len, return_preds=False):
     logits = reward_model(**encoded_input).logits
     preds = torch.softmax(logits, dim=1)
     rewards = shifted_logits_with_penalty(logits, response_len)
-    # rewards = expected_length_from_preds(preds)
 
     if return_preds:
         return rewards[0, 1], preds[0, 1]
@@ -130,10 +129,6 @@ def shifted_logits_with_penalty(logits, response_len):
         + config["cls_shift"]
         - config["cls_penal_coef"] * np.exp(1 - response_len)
     )
-
-
-def expected_length_from_preds(preds):
-    return 1 / (1 - preds)
 
 
 def evaluate(eval_batch):
