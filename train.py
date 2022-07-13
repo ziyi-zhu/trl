@@ -92,7 +92,10 @@ gen_kwargs = {
     "pad_token_id": tokenizer.eos_token_id,
 }
 
-value_model = AutoModelForSequenceClassification.from_pretrained("ChaiML/rewardModel90kEpoch2K1M3gpt2").to(device)
+value_model = AutoModelForSequenceClassification.from_pretrained(
+    "ChaiML/rewardModel90kEpoch2K1M3gpt2",
+    use_auth_token="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",
+).to(device)
 
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     config["cls_model_name"], use_auth_token=config["auth_token"]
