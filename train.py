@@ -248,8 +248,6 @@ total_epochs = config["epochs"]
 dataloader_iter = iter(dataloader)
 eval_batch = dataloader_iter.next()
 
-import pdb; pdb.set_trace()
-
 for epoch in range(total_epochs):
     print(f"Epoch {epoch + 1}/{total_epochs}")
 
