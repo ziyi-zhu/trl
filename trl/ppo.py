@@ -216,8 +216,7 @@ class PPOTrainer:
         for i in range(len(response_tokens)):
             input_ids = torch.concat([query_tokens, response_tokens[:i]])
             values.append(self.value_model(input_ids.unsqueeze(0)).logits[0, 1])
-        import pdb; pdb.set_trace()
-        return values
+        return torch.tensor(values, requires_grad=True)
 
 
     def compute_rewards(self, scores, logprobs, ref_logprobs):
@@ -251,8 +250,9 @@ class PPOTrainer:
         advantages = advantages.detach()
 
         logits = self.model(model_input).logits
-        vpred = self.value_model(input_ids).logits[:, 1]
+        vpred = self.compute_values(query, response)
         logprob = logprobs_from_logits(logits[:,:-1,:], model_input[:, 1:])
+        import pdb; pdb.set_trace()
 
         #only the generation part of the values/logprobs is needed
         logprob, vpred = logprob[:, -gen_len:], vpred[:,-gen_len-1:-1]
