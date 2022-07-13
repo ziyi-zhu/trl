@@ -187,13 +187,12 @@ class PPOTrainer:
             with torch.no_grad():
                 logits = self.model(input_ids).logits
                 ref_logits = self.ref_model(input_ids).logits
-                v = self.value_model(input_ids).logits[:, 1]
             logprobs = logprobs_from_logits(logits[:,:-1,:], input_ids[:,1:])
             ref_logprobs = logprobs_from_logits(ref_logits[:,:-1,:], input_ids[:,1:])
             for j in range(fbs):
                 start = len(query_batch[j])-1
                 end = len(query_batch[j]) + len(response_batch[j])-1
-                all_values.append(v[j, start-1:end-1])
+                all_values.append(self.compute_values(query_batch[j], response_batch[j]))
                 all_logprobs.append(logprobs[j, start:end])
                 all_ref_logprobs.append(ref_logprobs[j, start:end])
         return all_logprobs, all_ref_logprobs, all_values
@@ -211,6 +210,15 @@ class PPOTrainer:
         self.vf_optimizer.step()
 
         return train_stats
+
+    def compute_values(self, query_tokens, response_tokens):
+        values = []
+        for i in range(len(response_tokens)):
+            input_ids = query_tokens + response_tokens[:i]
+            import pdb; pdb.set_trace()
+            values.append(self.value_model(input_ids).logits[0, 1])
+        return values
+
 
     def compute_rewards(self, scores, logprobs, ref_logprobs):
         """Compute per token rewards from scores and KL-penalty."""
