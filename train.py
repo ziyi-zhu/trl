@@ -92,7 +92,7 @@ gen_kwargs = {
     "pad_token_id": tokenizer.eos_token_id,
 }
 
-value_model = GPT2HeadWithValueModel.from_pretrained(config["model_name"]).to(device)
+value_model = AutoModelForSequenceClassification.from_pretrained("ChaiML/rewardModel90kEpoch2K1M3gpt2").to(device)
 
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     config["cls_model_name"], use_auth_token=config["auth_token"]
@@ -244,6 +244,8 @@ total_epochs = config["epochs"]
 
 dataloader_iter = iter(dataloader)
 eval_batch = dataloader_iter.next()
+
+import pdb; pdb.set_trace()
 
 for epoch in range(total_epochs):
     print(f"Epoch {epoch + 1}/{total_epochs}")
