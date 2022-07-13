@@ -250,12 +250,11 @@ class PPOTrainer:
         advantages = advantages.detach()
 
         logits = self.model(model_input).logits
-        vpred = self.compute_values(query.squeeze(), response.squeeze())
+        vpred = self.compute_values(query.squeeze(), response.squeeze()).unsqueeze(0)
         logprob = logprobs_from_logits(logits[:,:-1,:], model_input[:, 1:])
-        import pdb; pdb.set_trace()
 
         #only the generation part of the values/logprobs is needed
-        logprob, vpred = logprob[:, -gen_len:], vpred[:,-gen_len-1:-1]
+        logprob = logprob[:, -gen_len:]
 
         vpredclipped = clip_by_value(vpred,
                                      values - self.ppo_params["cliprange_value"],
