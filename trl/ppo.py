@@ -214,9 +214,9 @@ class PPOTrainer:
     def compute_values(self, query_tokens, response_tokens):
         values = []
         for i in range(len(response_tokens)):
-            input_ids = query_tokens + response_tokens[:i]
-            import pdb; pdb.set_trace()
+            input_ids = torch.concat([query_tokens, response_tokens[:i]])
             values.append(self.value_model(input_ids).logits[0, 1])
+            import pdb; pdb.set_trace()
         return values
 
 
