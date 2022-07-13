@@ -215,8 +215,8 @@ class PPOTrainer:
         values = []
         for i in range(len(response_tokens)):
             input_ids = torch.concat([query_tokens, response_tokens[:i]])
-            values.append(self.value_model(input_ids).logits[0, 1])
-            import pdb; pdb.set_trace()
+            values.append(self.value_model(input_ids.unsqueeze(0)).logits[0, 1])
+        import pdb; pdb.set_trace()
         return values
 
 
