@@ -188,7 +188,6 @@ class PPOTrainer:
                 logits = self.model(input_ids).logits
                 ref_logits = self.ref_model(input_ids).logits
                 v = self.value_model(input_ids).logits[:, 1]
-                import pdb; pdb.set_trace()
             logprobs = logprobs_from_logits(logits[:,:-1,:], input_ids[:,1:])
             ref_logprobs = logprobs_from_logits(ref_logits[:,:-1,:], input_ids[:,1:])
             for j in range(fbs):
@@ -244,7 +243,7 @@ class PPOTrainer:
         advantages = advantages.detach()
 
         logits = self.model(model_input).logits
-        vpred = self.value_model(model_input)
+        vpred = self.value_model(input_ids).logits[:, 1]
         logprob = logprobs_from_logits(logits[:,:-1,:], model_input[:, 1:])
 
         #only the generation part of the values/logprobs is needed
