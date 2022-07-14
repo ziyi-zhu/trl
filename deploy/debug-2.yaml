@@ -30,9 +30,9 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "debug-gpt2-reward"
+          value: "debug-norm-reward"
         - name: PROJECT_NAME
-          value: "ppo-vf"
+          value: "ppo-debug"
         - name: ADAP_KL_CTRL
           value: "True"
         - name: INIT_KL_COEF
@@ -41,10 +41,8 @@ spec:
           value: "50"
         - name: HORIZON
           value: "1000"
-        - name: BATCH_SIZE
-          value: "2"
-        - name: FORWARD_BATCH_SIZE
-          value: "2"
+        - name: CLS_SHIFT
+          value: "-3.0"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:

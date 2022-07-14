@@ -137,6 +137,9 @@ class PPOTrainer:
         timing = dict()
         t0 = time.time()
 
+        self.model.eval()
+        self.value_model.eval()
+
         t = time.time()
         logprobs, ref_logprobs, values = self.batched_forward_pass(queries, responses)
         timing["time/ppo/forward_pass"] = time.time() - t
@@ -144,6 +147,9 @@ class PPOTrainer:
         t = time.time()
         rewards, non_score_reward = self.compute_rewards(scores, logprobs, ref_logprobs)
         timing["time/ppo/compute_rewards"] = time.time() - t
+
+        self.model.train()
+        self.value_model.train()
 
         t = time.time()
         all_stats = []

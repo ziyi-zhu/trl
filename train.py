@@ -261,7 +261,7 @@ for epoch in range(total_epochs):
         t0 = time.time()
         query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]
 
-        model.train()
+        model.eval()
 
         #### Get response from gpt2
         t = time.time()
