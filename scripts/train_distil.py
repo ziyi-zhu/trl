@@ -17,7 +17,7 @@ config = {
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
     "ref_model_name": "hakurei/lit-6B",
-    "epochs": 10,
+    "epochs": 5,
     "batch_size": 8,
     "lr": 1e-6,
 }
@@ -61,6 +61,8 @@ valid_dataloader = torch.utils.data.DataLoader(
 )
 
 cross_entropy = torch.nn.CrossEntropyLoss()
+kl_div = torch.nn.KLDivLoss(reduction="batchmean")
+
 optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
 
 total_steps = len(train_dataloader) * config["epochs"]
@@ -70,19 +72,23 @@ scheduler = get_linear_schedule_with_warmup(
 
 
 def train_step(batch):
+    logs = dict()
+
     model.train()
     batch = {k: v.type(torch.long).to(device) for k, v in batch.items()}
 
     with torch.no_grad():
-        targets = model_ref(**batch).logits
-        probs = torch.softmax(targets[:, :, : tokenizer.vocab_size], dim=-1)
+        target_logits = model_ref(**batch).logits[:, :, : tokenizer.vocab_size]
+        target_probs = torch.softmax(target_logits, dim=-1)
 
     model.zero_grad()
 
     mask = batch["attention_mask"].flatten().bool()
-    logits = model(**batch).logits
+    logits = model(**batch).logits[:, :, : tokenizer.vocab_size]
+    probs = torch.softmax(logits, dim=-1)
+
     loss = cross_entropy(
-        logits.flatten(end_dim=1)[mask], probs.flatten(end_dim=1)[mask]
+        logits.flatten(end_dim=1)[mask], target_probs.flatten(end_dim=1)[mask]
     )
 
     loss.backward()
@@ -91,7 +97,14 @@ def train_step(batch):
     optimizer.step()
     scheduler.step()
 
-    return loss
+    kl_loss = kl_div(
+        probs.flatten(end_dim=1)[mask], target_probs.flatten(end_dim=1)[mask]
+    )
+
+    logs["objective/cross_entropy"] = loss.item()
+    logs["objective/kl_divergence"] = kl_loss.item()
+
+    return loss, logs
 
 
 def validation_step(batch):
@@ -112,30 +125,34 @@ def validation_step(batch):
 
 
 def evaluation():
-    valid_loss = 0
+    valid_loss = []
 
     for batch in tqdm(valid_dataloader, total=len(valid_dataloader)):
         loss = validation_step(batch)
-        valid_loss += loss.item()
+        valid_loss.append(loss.item())
 
-    return valid_loss / len(valid_dataloader)
+    return np.mean(valid_loss)
 
 
 for epoch in range(config["epochs"]):
     print("======== Epoch {:} / {:} ========".format(epoch + 1, config["epochs"]))
 
+    train_loss = []
+
     for step, batch in enumerate(tqdm(train_dataloader, total=len(train_dataloader))):
         logs, timing = dict(), dict()
         t0 = time.time()
 
-        loss = train_step(batch)
+        loss, stats = train_step(batch)
+        train_loss.append(loss.item())
+
+        logs.update(stats)
 
         timing["time/batch"] = time.time() - t0
         logs.update(timing)
 
-        logs["loss/train"] = loss.item()
-
         if not step % 100:
             logs["loss/validation"] = evaluation()
+            logs["loss/train"] = np.mean(train_loss[-100:])
 
         wandb.log(logs)
