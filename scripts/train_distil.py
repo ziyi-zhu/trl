@@ -79,16 +79,15 @@ def train_step(batch):
 
     with torch.no_grad():
         target_logits = model_ref(**batch).logits[:, :, : tokenizer.vocab_size]
-        target_probs = torch.softmax(target_logits, dim=-1)
+        probs = torch.softmax(target_logits, dim=-1)
 
     model.zero_grad()
 
     mask = batch["attention_mask"].flatten().bool()
     logits = model(**batch).logits[:, :, : tokenizer.vocab_size]
-    probs = torch.softmax(logits, dim=-1)
 
     loss = cross_entropy(
-        logits.flatten(end_dim=1)[mask], target_probs.flatten(end_dim=1)[mask]
+        logits.flatten(end_dim=1)[mask], probs.flatten(end_dim=1)[mask]
     )
 
     loss.backward()
@@ -98,7 +97,7 @@ def train_step(batch):
     scheduler.step()
 
     kl_loss = kl_div(
-        probs.flatten(end_dim=1)[mask], target_probs.flatten(end_dim=1)[mask]
+        logits.flatten(end_dim=1)[mask], probs.flatten(end_dim=1)[mask]
     )
 
     logs["objective/cross_entropy"] = loss.item()
@@ -125,14 +124,15 @@ def validation_step(batch):
 
 
 def evaluation():
+    logs = dict()
     valid_loss = []
 
     for batch in tqdm(valid_dataloader, total=len(valid_dataloader)):
         loss = validation_step(batch)
         valid_loss.append(loss.item())
 
-    return np.mean(valid_loss)
-
+    logs["loss/validation"] = np.mean(valid_loss)
+    return logs
 
 for epoch in range(config["epochs"]):
     print("======== Epoch {:} / {:} ========".format(epoch + 1, config["epochs"]))
@@ -152,7 +152,7 @@ for epoch in range(config["epochs"]):
         logs.update(timing)
 
         if not step % 100:
-            logs["loss/validation"] = evaluation()
+            logs.update(evaluation())
             logs["loss/train"] = np.mean(train_loss[-100:])
 
         wandb.log(logs)
