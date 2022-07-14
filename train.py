@@ -72,7 +72,7 @@ ds = load_dataset(
     use_auth_token="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",
 )
 
-model = GPT2HeadWithValueModel.from_pretrained(config["model_name"])
+model = AutoModelForCausalLM.from_pretrained(config["model_name"])
 model_ref = AutoModelForCausalLM.from_pretrained(config["ref_model_name"])
 
 tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
@@ -92,6 +92,8 @@ gen_kwargs = {
     "pad_token_id": tokenizer.eos_token_id,
 }
 
+value_model = GPT2HeadWithValueModel.from_pretrained(config["model_name"]).to(device)
+
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     config["cls_model_name"], use_auth_token=config["auth_token"]
 ).to(device)
@@ -107,7 +109,7 @@ def tokenize(sample):
     return sample
 
 
-# ds = ds.filter(lambda x: np.random.uniform() < 0.1)
+ds = ds.filter(lambda x: np.random.uniform() < 0.01)
 ds = ds.map(tokenize, batched=False).shuffle(seed=42)
 
 
@@ -126,12 +128,16 @@ def calculate_reward(query, response, response_len, return_preds=False):
     ).to(device)
     logits = reward_model(**encoded_input).logits
     preds = torch.softmax(logits, dim=1)
-    rewards = shifted_logits_with_penalty(logits, response_len)
+    rewards = shifted_logits_with_penalty(inverse_sigmoid(preds), response_len)
 
     if return_preds:
         return rewards[0, 1], preds[0, 1]
     else:
         return rewards[0, 1]
+
+
+def inverse_sigmoid(preds):
+    return torch.log(preds) - torch.log(1 - preds)
 
 
 def shifted_logits_with_penalty(logits, response_len):
@@ -146,6 +152,8 @@ def evaluate(eval_batch):
     game_data = dict()
     game_data["query"] = eval_batch["query"]
     query_tensors = [torch.tensor(t).long().to(device) for t in eval_batch["tokens"]]
+
+    model.eval()
 
     #### get response from gpt2 and gpt2_ref
     response_tensors_ref, response_tensors = [], []
@@ -235,7 +243,7 @@ def clip_response(response, query_len):
     return response
 
 
-ppo_trainer = PPOTrainer(model, model_ref, tokenizer, **config)
+ppo_trainer = PPOTrainer(model, model_ref, value_model, tokenizer, **config)
 
 total_ppo_steps = int(np.ceil(config["steps"] / config["batch_size"]))
 total_epochs = config["epochs"]
@@ -250,6 +258,8 @@ for epoch in range(total_epochs):
         logs, timing = dict(), dict()
         t0 = time.time()
         query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]
+
+        model.train()
 
         #### Get response from gpt2
         t = time.time()
