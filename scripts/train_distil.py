@@ -4,25 +4,36 @@ import time
 import os
 from tqdm import tqdm
 import numpy as np
-import pandas as pd
 
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    get_linear_schedule_with_warmup,
+)
 
 config = {
     "model_name": "gpt2",
+    "auth_token": "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",
+    "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
     "ref_model_name": "hakurei/lit-6B",
-    "epochs": 5,
-    "batch_size": 256,
-    "lr": 1.41e-5,
+    "epochs": 10,
+    "batch_size": 8,
+    "lr": 1e-6,
 }
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+wandb.login(key=config["wandb_key"])
 wandb.init(name="run-test", project="gpt2-distil", config=config)
 
+ds = load_dataset(
+    "ChaiML/user_model_inputs",
+    use_auth_token=config["auth_token"],
+)
+
 model = AutoModelForCausalLM.from_pretrained(config["model_name"])
-model_ref = AutoModelForCausalLM.from_pretrained(config["ref_model_name"])
+model_ref = AutoModelForCausalLM.from_pretrained(config["ref_model_name"]).half()
 
 tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
 tokenizer.pad_token = tokenizer.eos_token
@@ -32,86 +43,99 @@ wandb.watch(model, log="all")
 model.to(device)
 model_ref.to(device)
 
-ds = load_dataset(
-    "ChaiML/user_model_inputs",
-    split="train",
-    use_auth_token="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",
+
+def tokenize(samples):
+    return tokenizer(samples["text"], max_length=1024, truncation=True, padding="max_length")
+
+
+# ds = ds.filter(lambda x: np.random.uniform() < 0.01)
+ds = ds.map(tokenize, batched=True).shuffle(seed=42)
+
+ds.set_format(type="torch", columns=["input_ids", "attention_mask"])
+
+train_dataloader = torch.utils.data.DataLoader(
+    ds["train"], batch_size=config["batch_size"]
+)
+valid_dataloader = torch.utils.data.DataLoader(
+    ds["validation"], batch_size=config["batch_size"]
 )
 
-import pdb; pdb.set_trace()
+cross_entropy = torch.nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
 
-def tokenize(sample):
-    sample["tokens"] = tokenizer.encode(sample["review"])[: input_size()]
-    sample["query"] = tokenizer.decode(sample["tokens"])
-    return sample
-
-
-ds = ds.filter(lambda x: np.random.uniform() < 0.01)
-ds = ds.map(tokenize, batched=False).shuffle(seed=42)
-
-
-def collater(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
-
-
-dataloader = torch.utils.data.DataLoader(
-    ds, batch_size=config["batch_size"], collate_fn=collater
+total_steps = len(train_dataloader) * config["epochs"]
+scheduler = get_linear_schedule_with_warmup(
+    optimizer, num_warmup_steps=0, num_training_steps=total_steps
 )
 
-model.train()
 
-for epoch, batch in tqdm(zip(range(total_ppo_epochs), iter(dataloader))):
-    logs, timing = dict(), dict()
-    t0 = time.time()
-    query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]
+def train_step(batch):
+    model.train()
+    batch = {k: v.type(torch.long).to(device) for k, v in batch.items()}
 
-    #### Get response from gpt2
-    t = time.time()
-    response_tensors = []
-    for i in range(config["batch_size"]):
-        gen_len = output_size()
-        response = gpt2_model.generate(
-            query_tensors[i].unsqueeze(dim=0), max_new_tokens=gen_len, **gen_kwargs
-        )
-        response_tensors.append(response.squeeze()[len(query_tensors[i]):])
-    batch["response"] = [gpt2_tokenizer.decode(r.squeeze()) for r in response_tensors]
-    timing["time/get_response"] = time.time() - t
+    with torch.no_grad():
+        targets = model_ref(**batch).logits
+        probs = torch.softmax(targets[:, :, : tokenizer.vocab_size], dim=-1)
 
-    #### Compute sentiment score
-    t = time.time()
-    rewards = torch.tensor(
-        [
-            calculate_reward(q, r)
-            for q, r in zip(batch["query"], batch["response"])
-        ]
-    ).to(device)
-    timing["time/get_sentiment_preds"] = time.time() - t
+    model.zero_grad()
 
-    #### Run PPO step
-    t = time.time()
-    stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-    timing["time/optimization"] = time.time() - t
-
-    #### Log everything
-    timing["time/epoch"] = time.time() - t0
-    table_rows = [
-        list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())
-    ]
-    logs.update(
-        {
-            "game_log": wandb.Table(
-                columns=["query", "response", "reward"], rows=table_rows
-            )
-        }
+    mask = batch["attention_mask"].flatten().bool()
+    logits = model(**batch).logits
+    loss = cross_entropy(
+        logits.flatten(end_dim=1)[mask], probs.flatten(end_dim=1)[mask]
     )
-    logs.update(timing)
-    logs.update(stats)
-    logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
-    logs["env/reward_std"] = torch.std(rewards).cpu().numpy()
-    logs["env/reward_dist"] = rewards.cpu().numpy()
 
-    for key in logs:
-        if isinstance(logs[key], list):
-            if isinstance(logs[key][0], torch.Tensor):
-                logs[key] = [array.cpu().numpy() for array in logs[key]]
-    wandb.log(logs)
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+    optimizer.step()
+    scheduler.step()
+
+    return loss
+
+
+def validation_step(batch):
+    model.eval()
+    batch = {k: v.type(torch.long).to(device) for k, v in batch.items()}
+
+    with torch.no_grad():
+        targets = model_ref(**batch).logits
+        probs = torch.softmax(targets[:, :, : tokenizer.vocab_size], dim=-1)
+
+        mask = batch["attention_mask"].flatten().bool()
+        logits = model(**batch).logits
+        loss = cross_entropy(
+            logits.flatten(end_dim=1)[mask], probs.flatten(end_dim=1)[mask]
+        )
+
+    return loss
+
+
+def evaluation():
+    valid_loss = 0
+
+    for batch in tqdm(valid_dataloader, total=len(valid_dataloader)):
+        loss = validation_step(batch)
+        valid_loss += loss.item()
+
+    return valid_loss / len(valid_dataloader)
+
+
+for epoch in range(config["epochs"]):
+    print("======== Epoch {:} / {:} ========".format(epoch + 1, config["epochs"]))
+
+    for step, batch in enumerate(tqdm(train_dataloader, total=len(train_dataloader))):
+        logs, timing = dict(), dict()
+        t0 = time.time()
+
+        loss = train_step(batch)
+
+        timing["time/batch"] = time.time() - t0
+        logs.update(timing)
+
+        logs["loss/train"] = loss.item()
+
+        if not step % 100:
+            logs["loss/validation"] = evaluation()
+
+        wandb.log(logs)
