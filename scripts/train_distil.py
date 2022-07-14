@@ -19,6 +19,7 @@ config = {
     "ref_model_name": "hakurei/lit-6B",
     "epochs": 5,
     "batch_size": 8,
+    "eval_interval": 128,
     "lr": 1e-6,
 }
 
@@ -87,8 +88,8 @@ def train_step(batch):
     logits = model(**batch).logits[:, :, : tokenizer.vocab_size]
 
     loss = cross_entropy(
-        logits.flatten(end_dim=1)[mask], probs.flatten(end_dim=1)[mask]
-    )
+        logits.flatten(end_dim=1), probs.flatten(end_dim=1)
+    ).masked_select(mask)
 
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -97,8 +98,8 @@ def train_step(batch):
     scheduler.step()
 
     kl_loss = kl_div(
-        logits.flatten(end_dim=1)[mask], probs.flatten(end_dim=1)[mask]
-    )
+        logits.flatten(end_dim=1), probs.flatten(end_dim=1)
+    ).masked_select(mask)
 
     logs["objective/cross_entropy"] = loss.item()
     logs["objective/kl_divergence"] = kl_loss.item()
@@ -111,14 +112,15 @@ def validation_step(batch):
     batch = {k: v.type(torch.long).to(device) for k, v in batch.items()}
 
     with torch.no_grad():
-        targets = model_ref(**batch).logits
-        probs = torch.softmax(targets[:, :, : tokenizer.vocab_size], dim=-1)
+        target_logits = model_ref(**batch).logits[:, :, : tokenizer.vocab_size]
+        probs = torch.softmax(target_logits, dim=-1)
 
         mask = batch["attention_mask"].flatten().bool()
-        logits = model(**batch).logits
+        logits = model(**batch).logits[:, :, : tokenizer.vocab_size]
+
         loss = cross_entropy(
-            logits.flatten(end_dim=1)[mask], probs.flatten(end_dim=1)[mask]
-        )
+            logits.flatten(end_dim=1), probs.flatten(end_dim=1)
+        ).masked_select(mask)
 
     return loss
 
@@ -133,6 +135,7 @@ def evaluation():
 
     logs["loss/validation"] = np.mean(valid_loss)
     return logs
+
 
 for epoch in range(config["epochs"]):
     print("======== Epoch {:} / {:} ========".format(epoch + 1, config["epochs"]))
@@ -151,8 +154,8 @@ for epoch in range(config["epochs"]):
         timing["time/batch"] = time.time() - t0
         logs.update(timing)
 
-        if not step % 100:
+        if not (step + 1) % config["eval_interval"]:
             logs.update(evaluation())
-            logs["loss/train"] = np.mean(train_loss[-100:])
+            logs["loss/train"] = np.mean(train_loss[-config["eval_interval"]:])
 
         wandb.log(logs)
