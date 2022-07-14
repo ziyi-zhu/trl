@@ -3,7 +3,7 @@ kind: Pod
 metadata:
   labels:
     qos.coreweave.cloud/latency: low
-  name: ppo-trainer-ziyi-debug-1
+  name: ppo-trainer-ziyi-debug-3
   namespace: tenant-chairesearch-test
 spec:
   volumes:
@@ -13,7 +13,7 @@ spec:
   imagePullSecrets:
       - name: docker-creds
   containers:
-    - name: ppo-trainer-container-ziyi-debug-1
+    - name: ppo-trainer-container-ziyi-debug-3
       image: gcr.io/chai-959f8/training:ppo-trainer-ziyi
       imagePullPolicy: Always
       resources:
@@ -30,7 +30,7 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "debug-sep-vf"
+          value: "gptj-ref"
         - name: PROJECT_NAME
           value: "ppo-vf"
         - name: ADAP_KL_CTRL
@@ -41,6 +41,10 @@ spec:
           value: "50"
         - name: HORIZON
           value: "1000"
+        - name: BATCH_SIZE
+          value: "32"
+        - name: REF_MODEL_NAME
+          value: "hakurei/lit-6B"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:

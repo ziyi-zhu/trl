@@ -8,7 +8,11 @@ import pandas as pd
 import random
 
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, AutoModelForCausalLM
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    AutoModelForCausalLM,
+)
 
 from trl.gpt2 import GPT2HeadWithValueModel, respond_to_batch
 from trl.ppo import PPOTrainer
@@ -109,7 +113,7 @@ def tokenize(sample):
     return sample
 
 
-ds = ds.filter(lambda x: np.random.uniform() < 0.01)
+# ds = ds.filter(lambda x: np.random.uniform() < 0.01)
 ds = ds.map(tokenize, batched=False).shuffle(seed=42)
 
 
@@ -163,14 +167,14 @@ def evaluate(eval_batch):
         output_ref = model_ref.generate(
             query_tensors[i].unsqueeze(dim=0).to(device),
             max_length=query_len + config["output_size"],
-            **gen_kwargs
+            **gen_kwargs,
         ).squeeze()
         response_tensors_ref.append(clip_response(output_ref, query_len))
 
         output = model.generate(
             query_tensors[i].unsqueeze(dim=0).to(device),
             max_length=query_len + config["output_size"],
-            **gen_kwargs
+            **gen_kwargs,
         ).squeeze()
         response_tensors.append(clip_response(output, query_len))
 
@@ -178,9 +182,7 @@ def evaluate(eval_batch):
     game_data["original_model_response"] = [
         tokenizer.decode(r) for r in response_tensors_ref
     ]
-    game_data["rl_model_response"] = [
-        tokenizer.decode(r) for r in response_tensors
-    ]
+    game_data["rl_model_response"] = [tokenizer.decode(r) for r in response_tensors]
 
     # responses using original model
     rewards = torch.tensor(
@@ -269,7 +271,7 @@ for epoch in range(total_epochs):
             response = model.generate(
                 query_tensors[i].unsqueeze(dim=0),
                 max_length=query_len + config["output_size"],
-                **gen_kwargs
+                **gen_kwargs,
             ).squeeze()
             response_tensors.append(clip_response(response, query_len))
 
@@ -296,7 +298,8 @@ for epoch in range(total_epochs):
         #### Log everything
         timing["time/epoch"] = time.time() - t0
         table_rows = [
-            list(r) for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())
+            list(r)
+            for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())
         ]
         logs.update(
             {

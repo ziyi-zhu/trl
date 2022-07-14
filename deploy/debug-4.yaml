@@ -30,17 +30,19 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "debug-adap-kl-ctrl"
+          value: "debug-norm-reward"
         - name: PROJECT_NAME
           value: "ppo-debug"
         - name: ADAP_KL_CTRL
           value: "True"
         - name: INIT_KL_COEF
-          value: "0.005"
+          value: "0.01"
         - name: TARGET
           value: "50"
         - name: HORIZON
           value: "1000"
+        - name: CLS_SHIFT
+          value: "-3.0"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:
