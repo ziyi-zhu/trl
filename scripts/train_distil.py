@@ -23,8 +23,10 @@ config = {
     "cls_tokenizer_name": "roberta-large-mnli",
     "epochs": 5,
     "batch_size": 8,
+    "input_size": 960,
+    "output_size": 32,
     "eval_interval": 128,
-    "lr": 1e-6,
+    "lr": 1e-5,
 }
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -40,14 +42,14 @@ ds = load_dataset(
 model = AutoModelForCausalLM.from_pretrained(config["model_name"])
 model_ref = AutoModelForCausalLM.from_pretrained(config["ref_model_name"]).half()
 
-tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
+tokenizer = AutoTokenizer.from_pretrained(config["model_name"], truncation_side="left")
 tokenizer.pad_token = tokenizer.eos_token
 
 gen_kwargs = {
     "min_length": -1,
-    "temperature": 1.0,
+    "temperature": 0.8,
     "top_k": 0.0,
-    "top_p": 1.0,
+    "top_p": 0.95,
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
 }
@@ -67,10 +69,12 @@ reward_tokenizer = AutoTokenizer.from_pretrained(
 
 
 def tokenize(samples):
-    return tokenizer(samples["text"], max_length=1024, truncation=True, padding="max_length")
+    return tokenizer(
+        samples["text"], max_length=1024, truncation=True, padding="max_length"
+    )
 
 
-ds = ds.filter(lambda x: np.random.uniform() < 0.01)
+# ds = ds.filter(lambda x: np.random.uniform() < 0.01)
 ds = ds.map(tokenize, batched=True).shuffle(seed=42)
 
 eval_batch = ds["validation"][:64]
@@ -110,9 +114,11 @@ def train_step(batch):
     mask = batch["attention_mask"].flatten().bool()
     logits = model(**batch).logits[:, :, : tokenizer.vocab_size]
 
-    loss = cross_entropy(
-        logits.flatten(end_dim=1), probs.flatten(end_dim=1)
-    ).masked_select(mask).mean()
+    loss = (
+        cross_entropy(logits.flatten(end_dim=1), probs.flatten(end_dim=1))
+        .masked_select(mask)
+        .mean()
+    )
 
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -120,9 +126,12 @@ def train_step(batch):
     optimizer.step()
     scheduler.step()
 
-    kl_loss = kl_div(
-        logits.flatten(end_dim=1), probs.flatten(end_dim=1)
-    ).sum(dim=-1).masked_select(mask).mean()
+    kl_loss = (
+        kl_div(logits.flatten(end_dim=1), probs.flatten(end_dim=1))
+        .sum(dim=-1)
+        .masked_select(mask)
+        .mean()
+    )
 
     logs["objective/cross_entropy"] = loss.item()
     logs["objective/kl_divergence"] = kl_loss.item()
@@ -141,9 +150,11 @@ def validation_step(batch):
         mask = batch["attention_mask"].flatten().bool()
         logits = model(**batch).logits[:, :, : tokenizer.vocab_size]
 
-        loss = cross_entropy(
-            logits.flatten(end_dim=1), probs.flatten(end_dim=1)
-        ).masked_select(mask)
+        loss = (
+            cross_entropy(logits.flatten(end_dim=1), probs.flatten(end_dim=1))
+            .masked_select(mask)
+            .mean()
+        )
 
     return loss
 
@@ -152,7 +163,7 @@ def evaluation():
     logs, table = dict(), dict()
     valid_loss = []
 
-    for batch in tqdm(valid_dataloader, total=len(valid_dataloader)):
+    for batch in valid_dataloader:
         loss = validation_step(batch)
         valid_loss.append(loss.item())
 
@@ -165,17 +176,17 @@ def evaluation():
 
     response_tensors_ref, response_tensors = [], []
     for i in range(len(input_ids)):
-        query_len = len(input_ids[i])
+        query_len = np.sum(eval_batch["attention_mask"][i])
 
         output_ref = model_ref.generate(
-            input_ids[i].unsqueeze(dim=0).to(device),
+            input_ids[i][:query_len].unsqueeze(dim=0).to(device),
             max_length=query_len + config["output_size"],
             **gen_kwargs,
         ).squeeze()
         response_tensors_ref.append(clip_response(output_ref, query_len))
 
         output = model.generate(
-            input_ids[i].unsqueeze(dim=0).to(device),
+            input_ids[i][:query_len].unsqueeze(dim=0).to(device),
             max_length=query_len + config["output_size"],
             **gen_kwargs,
         ).squeeze()
@@ -261,6 +272,20 @@ for epoch in range(config["epochs"]):
 
         if not (step + 1) % config["eval_interval"]:
             logs.update(evaluation())
-            logs["loss/train"] = np.mean(train_loss[-config["eval_interval"]:])
+            logs["loss/train"] = np.mean(train_loss[-config["eval_interval"] :])
 
         wandb.log(logs)
+
+    save_dir = f"/tmp/distil_model/checkpoint_{epoch + 1}"
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+
+    torch.save(
+        {
+            "epoch": epoch + 1,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "loss": loss.item(),
+        },
+        os.path.join(save_dir, "model.pt"),
+    )
