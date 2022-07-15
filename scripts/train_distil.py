@@ -49,7 +49,7 @@ def tokenize(samples):
     return tokenizer(samples["text"], max_length=1024, truncation=True, padding="max_length")
 
 
-# ds = ds.filter(lambda x: np.random.uniform() < 0.01)
+ds = ds.filter(lambda x: np.random.uniform() < 0.01)
 ds = ds.map(tokenize, batched=True).shuffle(seed=42)
 
 ds.set_format(type="torch", columns=["input_ids", "attention_mask"])
@@ -61,8 +61,8 @@ valid_dataloader = torch.utils.data.DataLoader(
     ds["validation"], batch_size=config["batch_size"]
 )
 
-cross_entropy = torch.nn.CrossEntropyLoss()
-kl_div = torch.nn.KLDivLoss(reduction="batchmean")
+cross_entropy = torch.nn.CrossEntropyLoss(reduction="none")
+kl_div = torch.nn.KLDivLoss(reduction="none")
 
 optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
 
@@ -89,7 +89,7 @@ def train_step(batch):
 
     loss = cross_entropy(
         logits.flatten(end_dim=1), probs.flatten(end_dim=1)
-    ).masked_select(mask)
+    ).masked_select(mask).mean()
 
     loss.backward()
     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -99,7 +99,7 @@ def train_step(batch):
 
     kl_loss = kl_div(
         logits.flatten(end_dim=1), probs.flatten(end_dim=1)
-    ).masked_select(mask)
+    ).sum(dim=-1).masked_select(mask).mean()
 
     logs["objective/cross_entropy"] = loss.item()
     logs["objective/kl_divergence"] = kl_loss.item()
