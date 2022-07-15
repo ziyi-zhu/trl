@@ -73,7 +73,9 @@ def tokenize(samples):
 ds = ds.filter(lambda x: np.random.uniform() < 0.01)
 ds = ds.map(tokenize, batched=True).shuffle(seed=42)
 
-ds.set_format(type="torch", columns=["input_ids", "attention_mask", "text", "reward_input"])
+eval_batch = ds["validation"][:64]
+
+ds.set_format(type="torch", columns=["input_ids", "attention_mask"])
 
 train_dataloader = torch.utils.data.DataLoader(
     ds["train"], batch_size=config["batch_size"]
@@ -156,10 +158,8 @@ def evaluation():
 
     logs["loss/validation"] = np.mean(valid_loss)
 
-    eval_batch = next(iter(valid_dataloader))
-
     table["text"] = eval_batch["text"]
-    input_ids = eval_batch["input_ids"]
+    input_ids = [torch.tensor(t).long().to(device) for t in eval_batch["input_ids"]]
 
     model.eval()
 
