@@ -238,9 +238,9 @@ class PPOTrainer:
             logprobs, values, rewards, query, response, model_input
         )
 
+        self.optimizer.zero_grad()
+        loss_p.backward()
         if self.steps >= self.init_steps:
-            self.optimizer.zero_grad()
-            loss_p.backward()
             self.optimizer.step()
 
         self.vf_optimizer.zero_grad()
