@@ -197,7 +197,8 @@ class PPOTrainer:
         stats = stats_to_np(stats)
         timing["time/ppo/calc_stats"] = time.time() - t
 
-        self.kl_ctl.update(stats["objective/kl"], self.ppo_params["batch_size"])
+        if self.steps >= self.init_steps:
+            self.kl_ctl.update(stats["objective/kl"], self.ppo_params["batch_size"])
         self.steps += 1
 
         timing["time/ppo/total"] = time.time() - t0
