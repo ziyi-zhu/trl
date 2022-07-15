@@ -170,27 +170,28 @@ def evaluation():
     logs["loss/validation"] = np.mean(valid_loss)
 
     table["text"] = eval_batch["text"]
-    input_ids = [torch.tensor(t).long().to(device) for t in eval_batch["input_ids"]]
+    input_tensors = [torch.tensor(t).long().to(device) for t in eval_batch["input_ids"]]
 
     model.eval()
 
     response_tensors_ref, response_tensors = [], []
-    for i in range(len(input_ids)):
+    for i in range(len(input_tensors)):
         query_len = np.sum(eval_batch["attention_mask"][i])
+        input_ids = input_tensors[i][max(query_len - config["input_size"], 0):query_len]
 
         output_ref = model_ref.generate(
-            input_ids[i][:query_len].unsqueeze(dim=0).to(device),
-            max_length=query_len + config["output_size"],
+            input_ids.unsqueeze(dim=0).to(device),
+            max_length=len(input_ids) + config["output_size"],
             **gen_kwargs,
         ).squeeze()
-        response_tensors_ref.append(clip_response(output_ref, query_len))
+        response_tensors_ref.append(clip_response(output_ref, len(input_ids)))
 
         output = model.generate(
-            input_ids[i][:query_len].unsqueeze(dim=0).to(device),
-            max_length=query_len + config["output_size"],
+            input_ids.unsqueeze(dim=0).to(device),
+            max_length=len(input_ids) + config["output_size"],
             **gen_kwargs,
         ).squeeze()
-        response_tensors.append(clip_response(output, query_len))
+        response_tensors.append(clip_response(output, len(input_ids)))
 
     table["original_model_response"] = [
         tokenizer.decode(r) for r in response_tensors_ref
