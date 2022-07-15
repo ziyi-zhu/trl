@@ -30,9 +30,9 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "debug-norm-reward"
+          value: "debug-dropout"
         - name: PROJECT_NAME
-          value: "ppo-debug"
+          value: "ppo-vf"
         - name: ADAP_KL_CTRL
           value: "True"
         - name: INIT_KL_COEF
