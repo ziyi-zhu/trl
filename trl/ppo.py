@@ -116,6 +116,9 @@ class PPOTrainer:
         else:
             self.kl_ctl = FixedKLController(self.ppo_params["init_kl_coef"])
 
+        self.steps = 0
+        self.init_steps = ppo_params["init_steps"]
+
     def step(self, queries, responses, scores):
         """
         Run a PPO optimisation step.
@@ -195,6 +198,7 @@ class PPOTrainer:
         timing["time/ppo/calc_stats"] = time.time() - t
 
         self.kl_ctl.update(stats["objective/kl"], self.ppo_params["batch_size"])
+        self.steps += 1
 
         timing["time/ppo/total"] = time.time() - t0
         stats.update(timing)
@@ -234,9 +238,10 @@ class PPOTrainer:
             logprobs, values, rewards, query, response, model_input
         )
 
-        self.optimizer.zero_grad()
-        loss_p.backward()
-        self.optimizer.step()
+        if self.steps >= self.init_steps:
+            self.optimizer.zero_grad()
+            loss_p.backward()
+            self.optimizer.step()
 
         self.vf_optimizer.zero_grad()
         loss_v.backward()

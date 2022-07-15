@@ -59,6 +59,7 @@ config = {
     "lam": float(os.environ.get("LAM", 0.95)),
     "cliprange": float(os.environ.get("CLIPRANGE", 0.2)),
     "cliprange_value": float(os.environ.get("CLIPRANGE_VALUE", 0.2)),
+    "init_steps": int(os.environ.get("INIT_STEPS", 0)),
     "vf_coef": float(os.environ.get("VF_COEF", 0.1)),
     "temperature": float(os.environ.get("TEMPERATURE", 1.0)),
     "top_k": int(os.environ.get("TOP_K", 0)),
