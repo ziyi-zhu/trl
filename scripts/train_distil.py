@@ -4,11 +4,13 @@ import time
 import os
 from tqdm import tqdm
 import numpy as np
+import pandas as pd
 
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
     get_linear_schedule_with_warmup,
 )
 
@@ -17,6 +19,8 @@ config = {
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
     "ref_model_name": "hakurei/lit-6B",
+    "cls_model_name": "ChaiML/rewardModel90kEpoch2K1M3",
+    "cls_tokenizer_name": "roberta-large-mnli",
     "epochs": 5,
     "batch_size": 8,
     "eval_interval": 128,
@@ -39,10 +43,27 @@ model_ref = AutoModelForCausalLM.from_pretrained(config["ref_model_name"]).half(
 tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
 tokenizer.pad_token = tokenizer.eos_token
 
+gen_kwargs = {
+    "min_length": -1,
+    "temperature": 1.0,
+    "top_k": 0.0,
+    "top_p": 1.0,
+    "do_sample": True,
+    "pad_token_id": tokenizer.eos_token_id,
+}
+
 wandb.watch(model, log="all")
 
 model.to(device)
 model_ref.to(device)
+
+reward_model = AutoModelForSequenceClassification.from_pretrained(
+    config["cls_model_name"], use_auth_token=config["auth_token"]
+).to(device)
+
+reward_tokenizer = AutoTokenizer.from_pretrained(
+    config["cls_tokenizer_name"], truncation_side="left", padding_side="left"
+)
 
 
 def tokenize(samples):
@@ -52,7 +73,7 @@ def tokenize(samples):
 ds = ds.filter(lambda x: np.random.uniform() < 0.01)
 ds = ds.map(tokenize, batched=True).shuffle(seed=42)
 
-ds.set_format(type="torch", columns=["input_ids", "attention_mask"])
+ds.set_format(type="torch", columns=["input_ids", "attention_mask", "text", "reward_input"])
 
 train_dataloader = torch.utils.data.DataLoader(
     ds["train"], batch_size=config["batch_size"]
@@ -126,7 +147,7 @@ def validation_step(batch):
 
 
 def evaluation():
-    logs = dict()
+    logs, table = dict(), dict()
     valid_loss = []
 
     for batch in tqdm(valid_dataloader, total=len(valid_dataloader)):
@@ -134,7 +155,91 @@ def evaluation():
         valid_loss.append(loss.item())
 
     logs["loss/validation"] = np.mean(valid_loss)
+
+    eval_batch = next(iter(valid_dataloader))
+
+    table["text"] = eval_batch["text"]
+    input_ids = eval_batch["input_ids"]
+
+    model.eval()
+
+    response_tensors_ref, response_tensors = [], []
+    for i in range(len(input_ids)):
+        query_len = len(input_ids[i])
+
+        output_ref = model_ref.generate(
+            input_ids[i].unsqueeze(dim=0).to(device),
+            max_length=query_len + config["output_size"],
+            **gen_kwargs,
+        ).squeeze()
+        response_tensors_ref.append(clip_response(output_ref, query_len))
+
+        output = model.generate(
+            input_ids[i].unsqueeze(dim=0).to(device),
+            max_length=query_len + config["output_size"],
+            **gen_kwargs,
+        ).squeeze()
+        response_tensors.append(clip_response(output, query_len))
+
+    table["original_model_response"] = [
+        tokenizer.decode(r) for r in response_tensors_ref
+    ]
+    table["distil_model_response"] = [tokenizer.decode(r) for r in response_tensors]
+
+    rewards = torch.tensor(
+        [
+            calculate_reward(q, r)
+            for q, r in zip(
+                eval_batch["reward_input"],
+                table["original_model_response"],
+            )
+        ]
+    )
+    table["original_model_rewards"] = rewards
+
+    rewards = torch.tensor(
+        [
+            calculate_reward(q, r)
+            for q, r in zip(
+                eval_batch["reward_input"],
+                table["distil_model_response"],
+            )
+        ]
+    )
+    table["distil_model_rewards"] = rewards
+
+    df_results = pd.DataFrame(table)
+
+    logs.update({"evaluation/comparison_table": wandb.Table(dataframe=df_results)})
+
+    mean_reward_before = torch.mean(table["original_model_rewards"])
+    mean_reward_after = torch.mean(table["distil_model_rewards"])
+
+    logs.update(
+        {
+            "evaluation/original_model_mean_reward": mean_reward_before.cpu().numpy(),
+            "evaluation/distil_model_mean_reward": mean_reward_after.cpu().numpy(),
+        }
+    )
+
     return logs
+
+
+def calculate_reward(query, response):
+    encoded_input = reward_tokenizer(
+        query + response, max_length=512, truncation=True, return_tensors="pt"
+    ).to(device)
+    logits = reward_model(**encoded_input).logits
+    preds = torch.softmax(logits, dim=1)
+    return preds[0, 1]
+
+
+def clip_response(response, query_len):
+    response = response[query_len:]
+    stop_idx = (response == torch.tensor(198)).nonzero().flatten()
+    if len(stop_idx) > 0:
+        response = response[: stop_idx[0] + 1]
+    return response
 
 
 for epoch in range(config["epochs"]):
