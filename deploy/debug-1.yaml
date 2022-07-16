@@ -30,17 +30,19 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "debug-sep-vf"
+          value: "gptj-fixed-kl"
         - name: PROJECT_NAME
-          value: "ppo-vf"
+          value: "ppo-kl"
+        - name: REF_MODEL_NAME
+          value: "hakurei/lit-6B"
         - name: ADAP_KL_CTRL
-          value: "True"
+          value: "False"
         - name: INIT_KL_COEF
-          value: "0.01"
-        - name: TARGET
-          value: "50"
-        - name: HORIZON
-          value: "1000"
+          value: "0.05"
+        - name: BATCH_SIZE
+          value: "32"
+        - name: CLS_SHIFT
+          value: "-3.0"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:

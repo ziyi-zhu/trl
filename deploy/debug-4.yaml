@@ -30,9 +30,11 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "debug-norm-reward"
+          value: "gptj-init-step"
         - name: PROJECT_NAME
-          value: "ppo-debug"
+          value: "ppo-kl"
+        - name: REF_MODEL_NAME
+          value: "hakurei/lit-6B"
         - name: ADAP_KL_CTRL
           value: "True"
         - name: INIT_KL_COEF
@@ -41,8 +43,12 @@ spec:
           value: "50"
         - name: HORIZON
           value: "1000"
+        - name: BATCH_SIZE
+          value: "32"
         - name: CLS_SHIFT
           value: "-3.0"
+        - name: INIT_STEPS
+          value: "100"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:
