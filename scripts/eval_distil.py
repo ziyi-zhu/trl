@@ -30,10 +30,7 @@ config = {
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-ds = load_dataset(
-    "ChaiML/user_model_inputs",
-    use_auth_token=config["auth_token"],
-)
+ds = load_dataset("ChaiML/user_model_inputs", use_auth_token=config["auth_token"])
 
 model = AutoModelForCausalLM.from_pretrained(config["model_name"])
 model_ref = AutoModelForCausalLM.from_pretrained(config["ref_model_name"]).half()
@@ -67,9 +64,7 @@ eval_batch = ds[:64]
 
 ds.set_format(type="torch", columns=["input_ids", "attention_mask"])
 
-valid_dataloader = torch.utils.data.DataLoader(
-    ds, batch_size=config["batch_size"]
-)
+valid_dataloader = torch.utils.data.DataLoader(ds, batch_size=config["batch_size"])
 
 cross_entropy = torch.nn.CrossEntropyLoss(reduction="none")
 kl_div = torch.nn.KLDivLoss(reduction="none")
@@ -115,7 +110,9 @@ def evaluation():
     response_tensors_ref, response_tensors = [], []
     for i in range(len(input_tensors)):
         query_len = np.sum(eval_batch["attention_mask"][i])
-        input_ids = input_tensors[i][max(query_len - config["input_size"], 0):query_len]
+        input_ids = input_tensors[i][
+            max(query_len - config["input_size"], 0) : query_len
+        ]
 
         output_ref = model_ref.generate(
             input_ids.unsqueeze(dim=0).to(device),
@@ -148,17 +145,17 @@ def clip_response(response, query_len):
 
 
 if __name__ == "__main__":
-    model_path = f"/tmp/distil_model/checkpoint_5/model.pt"
+    model_path = "/tmp/distil_model/checkpoint_5/model.pt"
     checkpoint = torch.load(model_path)
-    
+
     old_logs, old_table = evaluation()
     print("Original model loss: {}".format(old_logs["loss/validation"]))
 
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
-    epoch = checkpoint['epoch']
-    loss = checkpoint['loss']
-    
+    epoch = checkpoint["epoch"]
+    loss = checkpoint["loss"]
+
     logs, table = evaluation()
     print("Distilled model loss: {}".format(logs["loss/validation"]))
