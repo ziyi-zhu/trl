@@ -126,8 +126,9 @@ def train_step(batch):
     optimizer.step()
     scheduler.step()
 
+    log_probs = torch.log_softmax(logits, dim=-1)
     kl_loss = (
-        kl_div(logits.flatten(end_dim=1), probs.flatten(end_dim=1))
+        kl_div(log_probs.flatten(end_dim=1), probs.flatten(end_dim=1))
         .sum(dim=-1)
         .masked_select(mask)
         .mean()
