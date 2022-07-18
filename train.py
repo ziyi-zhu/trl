@@ -33,6 +33,7 @@ config = {
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
     "model_name": str(os.environ.get("MODEL_NAME", "gpt2")),
+    "vf_model_name": str(os.environ.get("VF_MODEL_NAME", "gpt2")),
     "ref_model_name": str(os.environ.get("REF_MODEL_NAME", "gpt2")),
     "cls_model_name": str(
         os.environ.get("CLS_MODEL_NAME", "ChaiML/rewardModel90kEpoch2K1M3")
@@ -40,7 +41,7 @@ config = {
     "cls_tokenizer_name": str(
         os.environ.get("CLS_TOKENIZER_NAME", "roberta-large-mnli")
     ),
-    "cls_shift": float(os.environ.get("CLS_SHIFT", -4.0)),
+    "cls_shift": float(os.environ.get("CLS_SHIFT", -3.0)),
     "cls_penal_coef": float(os.environ.get("CLS_PENAL_COEF", 1.2)),
     "steps": int(os.environ.get("STEPS", 50000)),
     "epochs": int(os.environ.get("EPOCHS", 5)),
@@ -74,11 +75,17 @@ wandb.init(name=config["run_name"], project=config["project_name"], config=confi
 ds = load_dataset(
     "ChaiML/user_model_inputs",
     split="train",
-    use_auth_token="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",
+    use_auth_token=config["auth_token"],
 )
 
-model = AutoModelForCausalLM.from_pretrained(config["model_name"])
-model_ref = AutoModelForCausalLM.from_pretrained(config["ref_model_name"])
+model = AutoModelForCausalLM.from_pretrained(
+    config["model_name"],
+    use_auth_token=config["auth_token"],
+)
+model_ref = AutoModelForCausalLM.from_pretrained(
+    config["ref_model_name"],
+    use_auth_token=config["auth_token"],
+)
 
 tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
 tokenizer.pad_token = tokenizer.eos_token
@@ -97,7 +104,7 @@ gen_kwargs = {
     "pad_token_id": tokenizer.eos_token_id,
 }
 
-value_model = GPT2HeadWithValueModel.from_pretrained(config["model_name"]).to(device)
+value_model = GPT2HeadWithValueModel.from_pretrained(config["vf_model_name"]).to(device)
 
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     config["cls_model_name"], use_auth_token=config["auth_token"]

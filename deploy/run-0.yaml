@@ -30,19 +30,13 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "run-0"
+          value: "gpt2-adap-kl"
         - name: PROJECT_NAME
-          value: "ppo-tuning"
-        - name: CLS_SHIFT
-          value: "0.0"
-        - name: LR
-          value: "1e-4"
-        - name: INIT_KL_COEF
-          value: "0.5"
-        - name: TOP_P
-          value: "0.95"
-        - name: TEMPERATURE
-          value: "0.7"
+          value: "ppo-distil"
+        - name: MODEL_NAME
+          value: "ChaiML/distil-gpt2-lit"
+        - name: REF_MODEL_NAME
+          value: "ChaiML/distil-gpt2-lit"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:
