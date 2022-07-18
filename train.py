@@ -262,6 +262,27 @@ total_epochs = config["epochs"]
 dataloader_iter = iter(dataloader)
 eval_batch = dataloader_iter.next()
 
+
+def save_checkpoint(model, optimizer, steps):
+    save_path = '/tmp/checkpoint-{}-state.pt'.format(steps)
+    print('saving checking to {}'.format(save_path))
+    state = {
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'steps': steps
+    }
+    torch.save(state, save_path)
+
+
+def load_checkpoint(model, optimizer, load_path):
+    print('loading checkpoint from {}'.format(load_path))
+    checkpoint = torch.load(load_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    steps = checkpoint['steps']
+    return model, optimizer, steps
+
+
 for epoch in range(total_epochs):
     print(f"Epoch {epoch + 1}/{total_epochs}")
 
@@ -330,5 +351,6 @@ for epoch in range(total_epochs):
 
         if not step % config["eval_interval"]:
             logs.update(evaluate(eval_batch))
+            save_checkpoint(ppo_trainer.model, ppo_trainer.optimizer, step)
 
         wandb.log(logs)

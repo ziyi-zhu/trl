@@ -30,19 +30,17 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "run-3"
+          value: "gptj-fixed-kl"
         - name: PROJECT_NAME
-          value: "ppo-tuning"
-        - name: TEMPERATURE
-          value: "0.8"
-        - name: GAMMA
-          value: "0.9"
+          value: "distil-ppo"
+        - name: MODEL_NAME
+          value: "ChaiML/distil-gpt2-lit"
+        - name: REF_MODEL_NAME
+          value: "hakurei/lit-6B"
         - name: ADAP_KL_CTRL
-          value: "True"
-        - name: VF_COEF
-          value: "0.2"
-        - name: LAM
-          value: "0.9"
+          value: "False"
+        - name: INIT_KL_COEF
+          value: "0.05"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:

@@ -30,19 +30,15 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "run-4"
+          value: "gpt2-fixed-kl"
         - name: PROJECT_NAME
-          value: "ppo-tuning"
-        - name: CLIPRANGE
-          value: "0.1"
-        - name: TARGET
-          value: "4"
-        - name: TEMPERATURE
-          value: "0.9"
-        - name: CLIPRANGE_VALUE
-          value: "0.1"
-        - name: HORIZON
-          value: "5000"
+          value: "distil-ppo"
+        - name: MODEL_NAME
+          value: "ChaiML/distil-gpt2-lit"
+        - name: REF_MODEL_NAME
+          value: "ChaiML/distil-gpt2-lit"
+        - name: ADAP_KL_CTRL
+          value: "False"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:
