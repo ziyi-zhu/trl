@@ -46,7 +46,8 @@ config = {
     "cls_penal_coef": float(os.environ.get("CLS_PENAL_COEF", 1.2)),
     "steps": int(os.environ.get("STEPS", 50000)),
     "epochs": int(os.environ.get("EPOCHS", 5)),
-    "eval_interval": int(os.environ.get("EVAL_INTERVAL", 10)),
+    "eval_steps": int(os.environ.get("EVAL_STEPS", 10)),
+    "checkpoint_steps": int(os.environ.get("CHECKPOINT_STEPS", 100)),
     "batch_size": int(os.environ.get("BATCH_SIZE", 32)),
     "forward_batch_size": int(os.environ.get("FORWARD_BATCH_SIZE", 16)),
     "ppo_epochs": int(os.environ.get("PPO_EPOCHS", 4)),
@@ -74,18 +75,14 @@ wandb.login(key=config["wandb_key"])
 wandb.init(name=config["run_name"], project=config["project_name"], config=config)
 
 ds = load_dataset(
-    "ChaiML/user_model_inputs",
-    split="train",
-    use_auth_token=config["auth_token"],
+    "ChaiML/user_model_inputs", split="train", use_auth_token=config["auth_token"]
 )
 
 model = AutoModelForCausalLM.from_pretrained(
-    config["model_name"],
-    use_auth_token=config["auth_token"],
+    config["model_name"], use_auth_token=config["auth_token"]
 )
 model_ref = AutoModelForCausalLM.from_pretrained(
-    config["ref_model_name"],
-    use_auth_token=config["auth_token"],
+    config["ref_model_name"], use_auth_token=config["auth_token"]
 )
 
 tokenizer = AutoTokenizer.from_pretrained(config["tokenizer_name"])
@@ -264,22 +261,22 @@ eval_batch = dataloader_iter.next()
 
 
 def save_checkpoint(model, optimizer, steps):
-    save_path = '/tmp/checkpoint-{}-state.pt'.format(steps)
-    print('saving checking to {}'.format(save_path))
+    save_path = "/tmp/checkpoint-{}-state.pt".format(steps)
+    print("saving checking to {}".format(save_path))
     state = {
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'steps': steps
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "steps": steps,
     }
     torch.save(state, save_path)
 
 
 def load_checkpoint(model, optimizer, load_path):
-    print('loading checkpoint from {}'.format(load_path))
+    print("loading checkpoint from {}".format(load_path))
     checkpoint = torch.load(load_path)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    steps = checkpoint['steps']
+    model.load_state_dict(checkpoint["model_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    steps = checkpoint["steps"]
     return model, optimizer, steps
 
 
@@ -349,8 +346,10 @@ for epoch in range(total_epochs):
                 if isinstance(logs[key][0], torch.Tensor):
                     logs[key] = [array.cpu().numpy() for array in logs[key]]
 
-        if not step % config["eval_interval"]:
+        if not step % config["eval_steps"]:
             logs.update(evaluate(eval_batch))
+
+        if not step % config["checkpoint_steps"]:
             save_checkpoint(ppo_trainer.model, ppo_trainer.optimizer, step)
 
         wandb.log(logs)
