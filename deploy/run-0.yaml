@@ -32,7 +32,7 @@ spec:
         - name: RUN_NAME
           value: "gpt2-adap-kl"
         - name: PROJECT_NAME
-          value: "ppo-distil"
+          value: "distil-ppo"
         - name: MODEL_NAME
           value: "ChaiML/distil-gpt2-lit"
         - name: REF_MODEL_NAME

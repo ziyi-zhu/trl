@@ -33,6 +33,7 @@ config = {
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
     "model_name": str(os.environ.get("MODEL_NAME", "gpt2")),
+    "tokenizer_name": str(os.environ.get("TOKENIZER_NAME", "gpt2")),
     "vf_model_name": str(os.environ.get("VF_MODEL_NAME", "gpt2")),
     "ref_model_name": str(os.environ.get("REF_MODEL_NAME", "gpt2")),
     "cls_model_name": str(
@@ -46,7 +47,7 @@ config = {
     "steps": int(os.environ.get("STEPS", 50000)),
     "epochs": int(os.environ.get("EPOCHS", 5)),
     "eval_interval": int(os.environ.get("EVAL_INTERVAL", 10)),
-    "batch_size": int(os.environ.get("BATCH_SIZE", 64)),
+    "batch_size": int(os.environ.get("BATCH_SIZE", 32)),
     "forward_batch_size": int(os.environ.get("FORWARD_BATCH_SIZE", 16)),
     "ppo_epochs": int(os.environ.get("PPO_EPOCHS", 4)),
     "input_size": int(os.environ.get("INPUT_SIZE", 960)),
@@ -87,7 +88,7 @@ model_ref = AutoModelForCausalLM.from_pretrained(
     use_auth_token=config["auth_token"],
 )
 
-tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
+tokenizer = AutoTokenizer.from_pretrained(config["tokenizer_name"])
 tokenizer.pad_token = tokenizer.eos_token
 
 wandb.watch(model, log="all")
