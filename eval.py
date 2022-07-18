@@ -32,10 +32,10 @@ config = {
     "project_name": str(os.environ.get("PROJECT_NAME", "gpt2-ppo")),
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
-    "model_name": str(os.environ.get("MODEL_NAME", "gpt2")),
+    "model_name": "ChaiML/distil-gpt2-ppo-v1",
     "tokenizer_name": str(os.environ.get("TOKENIZER_NAME", "gpt2")),
     "vf_model_name": str(os.environ.get("VF_MODEL_NAME", "gpt2")),
-    "ref_model_name": str(os.environ.get("REF_MODEL_NAME", "gpt2")),
+    "ref_model_name": "hakurei/lit-6B",
     "cls_model_name": str(
         os.environ.get("CLS_MODEL_NAME", "ChaiML/rewardModel90kEpoch2K1M3")
     ),
@@ -71,9 +71,6 @@ config = {
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-wandb.login(key=config["wandb_key"])
-wandb.init(name=config["run_name"], project=config["project_name"], config=config)
-
 ds = load_dataset(
     "ChaiML/user_model_inputs", split="train", use_auth_token=config["auth_token"]
 )
@@ -83,26 +80,23 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 model_ref = AutoModelForCausalLM.from_pretrained(
     config["ref_model_name"], use_auth_token=config["auth_token"]
-)
+).half()
 
 tokenizer = AutoTokenizer.from_pretrained(config["tokenizer_name"])
 tokenizer.pad_token = tokenizer.eos_token
-
-wandb.watch(model, log="all")
 
 model.to(device)
 model_ref.to(device)
 
 gen_kwargs = {
     "min_length": -1,
-    "temperature": config["temperature"],
-    "top_k": config["top_k"],
-    "top_p": config["top_p"],
+    "temperature": 0.72,
+    "repetition_penalty": 1.13125,
+    "top_k": 0,
+    "top_p": 0.725,
     "do_sample": True,
     "pad_token_id": tokenizer.eos_token_id,
 }
-
-value_model = GPT2HeadWithValueModel.from_pretrained(config["vf_model_name"]).to(device)
 
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     config["cls_model_name"], use_auth_token=config["auth_token"]
@@ -121,15 +115,6 @@ def tokenize(sample):
 
 # ds = ds.filter(lambda x: np.random.uniform() < 0.01)
 ds = ds.map(tokenize, batched=False).shuffle(seed=42)
-
-
-def collater(data):
-    return dict((key, [d[key] for d in data]) for key in data[0])
-
-
-dataloader = torch.utils.data.DataLoader(
-    ds, batch_size=config["batch_size"], collate_fn=collater
-)
 
 
 def calculate_reward(query, response, response_len, return_preds=False):
@@ -251,38 +236,4 @@ def clip_response(response, query_len):
     return response
 
 
-ppo_trainer = PPOTrainer(model, model_ref, value_model, tokenizer, **config)
-
-total_ppo_steps = int(np.ceil(config["steps"] / config["batch_size"]))
-total_epochs = config["epochs"]
-
-dataloader_iter = iter(dataloader)
-eval_batch = dataloader_iter.next()
-
-
-def save_checkpoint(model, optimizer, steps):
-    save_path = "/tmp/checkpoint-{}-state.pt".format(steps)
-    print("saving checking to {}".format(save_path))
-    state = {
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "steps": steps,
-    }
-    torch.save(state, save_path)
-
-
-def load_checkpoint(model, optimizer, load_path):
-    print("loading checkpoint from {}".format(load_path))
-    checkpoint = torch.load(load_path)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    steps = checkpoint["steps"]
-    return model, optimizer, steps
-
-
-if __name__ == "__main__":
-    steps = 90
-    load_path = "/tmp/checkpoint-{}-state.pt".format(steps)
-
-    model, _, _ = load_checkpoint(ppo_trainer.model, ppo_trainer.optimizer, load_path)
-    logs = evaluate(ds[:256])
+logs = evaluate(ds[:256])
