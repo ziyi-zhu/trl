@@ -67,6 +67,8 @@ config = {
     "temperature": float(os.environ.get("TEMPERATURE", 1.0)),
     "top_k": int(os.environ.get("TOP_K", 0)),
     "top_p": float(os.environ.get("TOP_P", 1.0)),
+    "device": 1,
+    "model_device": 0,
 }
 
 model_device = 0
