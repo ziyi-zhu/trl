@@ -107,6 +107,9 @@ class PPOTrainer:
         self.optimizer = Adam(model.parameters(), lr=self.ppo_params["lr"])
         self.vf_optimizer = Adam(value_model.parameters(), lr=self.ppo_params["lr"])
 
+        self.device = self.ppo_params["device"]
+        self.model_device = self.ppo_params["model_device"]
+
         if self.ppo_params["adap_kl_ctrl"]:
             self.kl_ctl = AdaptiveKLController(
                 self.ppo_params["init_kl_coef"],
@@ -218,9 +221,9 @@ class PPOTrainer:
             response_batch = responses[i * fbs : (i + 1) * fbs]
             input_ids = self.data_collator(
                 [torch.cat([q, r]) for q, r in zip(query_batch, response_batch)]
-            )["input_ids"]
+            )["input_ids"].to(self.device)
             with torch.no_grad():
-                logits = self.model(input_ids).logits
+                logits = self.model(input_ids.to(self.model_device)).logits
                 ref_logits = self.ref_model(input_ids).logits
                 v = self.value_model(input_ids)
             logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
