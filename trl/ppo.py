@@ -223,7 +223,7 @@ class PPOTrainer:
                 [torch.cat([q, r]) for q, r in zip(query_batch, response_batch)]
             )["input_ids"].to(self.device)
             with torch.no_grad():
-                logits = self.model(input_ids.to(self.model_device)).logits
+                logits = self.model(input_ids.to(self.model_device)).logits.to(self.device)
                 ref_logits = self.ref_model(input_ids).logits
                 v = self.value_model(input_ids)
             logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
@@ -283,10 +283,10 @@ class PPOTrainer:
         returns = advantages + values
         if gen_len > 1:
             advantages = whiten(advantages)
-        advantages = advantages.detach()
+        advantages = advantages.detach().to(self.model_device)
 
         logits = self.model(model_input).logits
-        vpred = self.value_model(model_input)
+        vpred = self.value_model(model_input.to(self.device))
         logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
 
         # only the generation part of the values/logprobs is needed
@@ -303,7 +303,7 @@ class PPOTrainer:
         vf_loss = 0.5 * torch.mean(torch.max(vf_losses1, vf_losses2))
         vf_clipfrac = torch.mean(torch.gt(vf_losses2, vf_losses1).double())
 
-        ratio = torch.exp(logprob - old_logprobs)
+        ratio = torch.exp(logprob - old_logprobs.to(self.model_device))
 
         pg_losses = -advantages * ratio
         pg_losses2 = -advantages * torch.clamp(
@@ -315,16 +315,14 @@ class PPOTrainer:
         pg_loss = torch.mean(torch.max(pg_losses, pg_losses2))
         pg_clipfrac = torch.mean(torch.gt(pg_losses2, pg_losses).double())
 
-        loss = pg_loss + self.ppo_params["vf_coef"] * vf_loss
-
         entropy = torch.mean(entropy_from_logits(logits))
-        approxkl = 0.5 * torch.mean((logprob - old_logprobs) ** 2)
-        policykl = torch.mean(logprob - old_logprobs)
+        approxkl = 0.5 * torch.mean((logprob - old_logprobs.to(self.model_device)) ** 2)
+        policykl = torch.mean(logprob - old_logprobs.to(self.model_device))
         return_mean, return_var = torch.mean(returns), torch.var(returns)
         value_mean, value_var = torch.mean(values), torch.var(values)
 
         stats = dict(
-            loss=dict(policy=pg_loss, value=vf_loss, total=loss),
+            loss=dict(policy=pg_loss, value=vf_loss),
             policy=dict(
                 entropy=entropy,
                 approxkl=approxkl,

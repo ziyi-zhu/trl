@@ -27,15 +27,17 @@ def reduce_randomness(seed=0):
 
 reduce_randomness(42)
 
+DEFAULT_MODEL = "hakurei/litv2-6B-rev2"
+
 config = {
     "run_name": str(os.environ.get("RUN_NAME", "run-test")),
     "project_name": str(os.environ.get("PROJECT_NAME", "gpt2-ppo")),
     "auth_token": "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",
     "wandb_key": "f3c2ba6991e7af7c6225908adad8f098296d7433",
-    "model_name": str(os.environ.get("MODEL_NAME", "gpt2")),
-    "tokenizer_name": str(os.environ.get("TOKENIZER_NAME", "gpt2")),
+    "model_name": str(os.environ.get("MODEL_NAME", DEFAULT_MODEL)),
+    "tokenizer_name": str(os.environ.get("TOKENIZER_NAME", DEFAULT_MODEL)),
     "vf_model_name": str(os.environ.get("VF_MODEL_NAME", "gpt2")),
-    "ref_model_name": str(os.environ.get("REF_MODEL_NAME", "gpt2")),
+    "ref_model_name": str(os.environ.get("REF_MODEL_NAME", DEFAULT_MODEL)),
     "cls_model_name": str(
         os.environ.get("CLS_MODEL_NAME", "ChaiML/rewardModel90kEpoch2K1M3")
     ),
@@ -74,8 +76,8 @@ config = {
 model_device = 0
 other_device = 1
 
-wandb.login(key=config["wandb_key"])
-wandb.init(name=config["run_name"], project=config["project_name"], config=config)
+#wandb.login(key=config["wandb_key"])
+#wandb.init(name=config["run_name"], project=config["project_name"], config=config)
 
 ds = load_dataset(
     "ChaiML/user_model_inputs", split="train", use_auth_token=config["auth_token"]
@@ -91,7 +93,7 @@ model_ref = AutoModelForCausalLM.from_pretrained(
 tokenizer = AutoTokenizer.from_pretrained(config["tokenizer_name"])
 tokenizer.pad_token = tokenizer.eos_token
 
-wandb.watch(model, log="all")
+#wandb.watch(model, log="all")
 
 model.to(model_device)
 model_ref.to(other_device)
@@ -122,7 +124,7 @@ def tokenize(sample):
     return sample
 
 
-# ds = ds.filter(lambda x: np.random.uniform() < 0.01)
+ds = ds.filter(lambda x: np.random.uniform() < 0.01)
 ds = ds.map(tokenize, batched=False).shuffle(seed=42)
 
 
@@ -317,7 +319,7 @@ for epoch in range(total_epochs):
                     batch["reward_input"], batch["response"], response_tensors
                 )
             ]
-        ).to(model_device)
+        )
         timing["time/get_reward_preds"] = time.time() - t
 
         #### Run PPO step
