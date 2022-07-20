@@ -14,7 +14,7 @@ spec:
       - name: docker-creds
   containers:
     - name: ppo-trainer-container-ziyi-multiple
-      image: gcr.io/chai-959f8/training:ppo-trainer-ziyi
+      image: gcr.io/chai-959f8/training:cuda-ppo
       imagePullPolicy: Always
       resources:
         limits:
