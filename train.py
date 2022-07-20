@@ -47,7 +47,7 @@ config = {
     "steps": int(os.environ.get("STEPS", 50000)),
     "epochs": int(os.environ.get("EPOCHS", 5)),
     "eval_steps": int(os.environ.get("EVAL_STEPS", 10)),
-    "checkpoint_steps": int(os.environ.get("CHECKPOINT_STEPS", 100)),
+    "checkpoint_steps": int(os.environ.get("CHECKPOINT_STEPS", 30)),
     "batch_size": int(os.environ.get("BATCH_SIZE", 32)),
     "forward_batch_size": int(os.environ.get("FORWARD_BATCH_SIZE", 16)),
     "ppo_epochs": int(os.environ.get("PPO_EPOCHS", 4)),
