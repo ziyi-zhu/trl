@@ -30,11 +30,27 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "run-no-kl"
+          value: "entropy-gpt-neo-1.3B"
         - name: PROJECT_NAME
-          value: "gpt2-ppo"
+          value: "gpt2-large-ppo"
+        - name: MODEL_NAME
+          value: "EleutherAI/gpt-neo-1.3B"
+        - name: TOKENIZER_NAME
+          value: "EleutherAI/gpt-neo-1.3B"
+        - name: REF_MODEL_NAME
+          value: "hakurei/litv2-6B-rev2"
+        - name: BATCH_SIZE
+          value: "16"
+        - name: FP16
+          value: "True"
+        - name: ADAP_KL_CTRL
+          value: "True"
         - name: INIT_KL_COEF
-          value: "0.0"
+          value: "0.05"
+        - name: TARGET
+          value: "10"
+        - name: HORIZON
+          value: "10000"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:
