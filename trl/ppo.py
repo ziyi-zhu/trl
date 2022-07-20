@@ -119,42 +119,14 @@ class PPOTrainer:
         self.steps = 0
         self.init_steps = ppo_params["init_steps"]
 
-    def step(self, queries, responses, scores):
+    def step(self, input_ids, response_mask, scores):
         """
         Run a PPO optimisation step.
-
-        args:
-            queries (List): List of tensors containing the encoded queries, shape [query_length]
-            responses (List): List of tensors containing the encoded responses, shape [response_length]
-            scores (List): tensor containing the scores, shape [batch_size]
-
-        returns:
-            train_stats (dict): a summary of the training statistics
         """
+        logprobs, ref_logprobs, values = self.batched_forward_pass(input_ids)
 
-        bs = self.ppo_params["batch_size"]
-        assert bs == len(
-            queries
-        ), f"Batch size ({bs}) does not match number of examples ({len(queries)})"
-
-        timing = dict()
-        t0 = time.time()
-
-        self.model.eval()
-        self.value_model.eval()
-
-        t = time.time()
-        logprobs, ref_logprobs, values = self.batched_forward_pass(queries, responses)
-        timing["time/ppo/forward_pass"] = time.time() - t
-
-        t = time.time()
         rewards, non_score_reward = self.compute_rewards(scores, logprobs, ref_logprobs)
-        timing["time/ppo/compute_rewards"] = time.time() - t
 
-        self.model.train()
-        self.value_model.train()
-
-        t = time.time()
         all_stats = []
         idxs = list(range(bs))
         for _ in range(self.ppo_params["ppo_epochs"]):
@@ -170,9 +142,7 @@ class PPOTrainer:
                     torch.cat([queries[idx], responses[idx]]).unsqueeze(0),
                 )
                 all_stats.append(train_stats)
-        timing["time/ppo/optimize_step"] = time.time() - t
 
-        t = time.time()
         train_stats = stack_dicts(all_stats)
 
         # reshape advantages/ratios such that they are not averaged.
@@ -195,42 +165,25 @@ class PPOTrainer:
             kl_coef=self.kl_ctl.value,
         )
         stats = stats_to_np(stats)
-        timing["time/ppo/calc_stats"] = time.time() - t
 
         if self.steps >= self.init_steps:
             self.kl_ctl.update(stats["objective/kl"], self.ppo_params["batch_size"])
         self.steps += 1
 
-        timing["time/ppo/total"] = time.time() - t0
-        stats.update(timing)
         return stats
 
-    def batched_forward_pass(self, queries, responses):
-        """Calculate model outputs in multiple batches."""
-        bs = self.ppo_params["batch_size"]
-        fbs = self.ppo_params["forward_batch_size"]
-        all_logprobs = []
-        all_ref_logprobs = []
-        all_values = []
+    @torch.no_grad()
+    def batched_forward_pass(self, input_ids):
+        """Calculate model outputs in batches."""
+        logits = self.model(input_ids).logits
+        ref_logits = self.ref_model(input_ids).logits
+        values = self.value_model(input_ids)
 
-        for i in range(int(bs / fbs)):
-            query_batch = queries[i * fbs : (i + 1) * fbs]
-            response_batch = responses[i * fbs : (i + 1) * fbs]
-            input_ids = self.data_collator(
-                [torch.cat([q, r]) for q, r in zip(query_batch, response_batch)]
-            )["input_ids"]
-            with torch.no_grad():
-                logits = self.model(input_ids).logits
-                ref_logits = self.ref_model(input_ids).logits
-                v = self.value_model(input_ids)
-            logprobs = logprobs_from_logits(logits[:, :-1, :], input_ids[:, 1:])
-            ref_logprobs = logprobs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
-            for j in range(fbs):
-                start = len(query_batch[j]) - 1
-                end = len(query_batch[j]) + len(response_batch[j]) - 1
-                all_values.append(v[j, start - 1 : end - 1])
-                all_logprobs.append(logprobs[j, start:end])
-                all_ref_logprobs.append(ref_logprobs[j, start:end])
+        labels = input_ids.roll(-1)
+        logprobs = logprobs_from_logits(logits, labels)
+        ref_logprobs = logprobs_from_logits(ref_logits, labels)
+        import pdb; pdb.set_trace()
+
         return all_logprobs, all_ref_logprobs, all_values
 
     def train_minibatch(self, logprobs, values, rewards, query, response, model_input):

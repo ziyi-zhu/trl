@@ -14,18 +14,9 @@ from transformers import (
     AutoModelForCausalLM,
 )
 
-from trl.gpt2 import GPT2HeadWithValueModel, respond_to_batch
+from trl.gpt2 import GPT2HeadWithValueModel
 from trl.ppo import PPOTrainer
-from trl.core import build_bert_batch_from_txt, listify_batch
 
-
-def reduce_randomness(seed=0):
-    torch.manual_seed(seed)
-    random.seed(seed)
-    np.random.seed(seed)
-
-
-reduce_randomness(42)
 
 config = {
     "run_name": str(os.environ.get("RUN_NAME", "run-test")),
@@ -73,12 +64,8 @@ config = {
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-#wandb.login(key=config["wandb_key"])
-#wandb.init(name=config["run_name"], project=config["project_name"], config=config)
-
-ds = load_dataset(
-    "ChaiML/user_model_inputs", split="train", use_auth_token=config["auth_token"]
-)
+# wandb.login(key=config["wandb_key"])
+# wandb.init(name=config["run_name"], project=config["project_name"], config=config)
 
 model = AutoModelForCausalLM.from_pretrained(
     config["model_name"], use_auth_token=config["auth_token"]
@@ -94,7 +81,7 @@ tokenizer = AutoTokenizer.from_pretrained(
 )
 tokenizer.pad_token = tokenizer.eos_token
 
-#wandb.watch(model, log="all")
+# wandb.watch(model, log="all")
 
 model.to(device)
 model_ref.to(device)
@@ -118,22 +105,23 @@ reward_tokenizer = AutoTokenizer.from_pretrained(
     config["cls_tokenizer_name"], truncation_side="left", padding_side="left"
 )
 
-
-def tokenize(samples):
-    return tokenizer(samples["text"], padding=True, truncation=True, max_length=config["input_size"], return_tensors="pt")
-
-
-dataloader = torch.utils.data.DataLoader(
-    ds, batch_size=config["batch_size"]
-)
-
 ppo_trainer = PPOTrainer(model, model_ref, value_model, tokenizer, **config)
 
-total_ppo_steps = int(np.ceil(config["steps"] / config["batch_size"]))
-total_epochs = config["epochs"]
 
-dataloader_iter = iter(dataloader)
-eval_batch = dataloader_iter.next()
+def reduce_randomness(seed=0):
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+
+
+def tokenize(samples):
+    return tokenizer(
+        samples["text"],
+        padding=True,
+        truncation=True,
+        max_length=config["input_size"],
+        return_tensors="pt",
+    )
 
 
 def save_checkpoint(model, optimizer, steps):
@@ -158,15 +146,59 @@ def load_checkpoint(model, optimizer, load_path):
 
 def train_step(batch):
     batch_encoded = tokenize(batch).to(device)
-    responses, responses_decoded = get_model_responses(model, **batch_encoded)
-    rewards, preds = compute_rewards(batch, responses_decoded)
+    model_output, responses = get_model_responses(model, **batch_encoded)
+
+    responses = [format_response(response) for response in responses]
+    rewards, preds = compute_rewards(batch, responses)
+
+    response_mask = get_response_mask(model_output, responses, **batch_encoded)
+    logs = ppo_trainer.step(model_output, response_mask, rewards)
+    logs.update(get_train_logs(batch, responses, rewards))
+
+    return logs
+
+
+def get_response_mask(model_output, responses, input_ids, attention_mask):
+    response_encoded = tokenizer(
+        responses,
+        padding="max_length",
+        max_length=model_output.size(-1) - input_ids.size(-1),
+        return_tensors="pt",
+    )
     import pdb; pdb.set_trace()
-    stats = ppo_trainer.step(batch_encoded, responses, rewards)
+    return input_ids
 
 
+def get_train_logs(batch, responses, rewards):
+    logs = dict()
+    logs["response_log"] = get_response_table(batch, responses, rewards)
+    logs["train/reward_mean"] = torch.mean(rewards).cpu().numpy()
+    logs["train/reward_std"] = torch.std(rewards).cpu().numpy()
+    logs["train/reward_dist"] = rewards.cpu().numpy()
+    return logs
+
+
+def get_response_table(batch, responses, rewards):
+    table_rows = [
+        [text, response, reward.item()]
+        for text, response, reward in zip(batch["text"], responses, rewards)
+    ]
+    return wandb.Table(columns=["text", "response", "reward"], rows=table_rows)
+
+
+@torch.no_grad()
 def compute_rewards(batch, responses):
-    reward_inputs = [reward_input + format_response(response) for reward_input, response in zip(batch["reward_input"], responses)]
-    input_encoded = reward_tokenizer(reward_inputs, padding=True, truncation=True, max_length=config["cls_input_size"], return_tensors="pt").to(device)
+    reward_inputs = [
+        reward_input + response
+        for reward_input, response in zip(batch["reward_input"], responses)
+    ]
+    input_encoded = reward_tokenizer(
+        reward_inputs,
+        padding=True,
+        truncation=True,
+        max_length=config["cls_input_size"],
+        return_tensors="pt",
+    ).to(device)
     logits = reward_model(**input_encoded).logits
     return calculate_reward_score(logits)
 
@@ -181,7 +213,7 @@ def shifted_logits_with_penalty(logits):
     return (
         logits
         + config["cls_shift"]
-#        - config["cls_penal_coef"] * np.exp(1 - response_len)
+        #        - config["cls_penal_coef"] * np.exp(1 - response_len)
     )
 
 
@@ -192,7 +224,6 @@ def inverse_sigmoid(preds):
 def format_response(response):
     response = clip_response_to_text(response, "\n")
     response = clip_response_to_text(response, "<|endoftext|>")
-    print(response)
     return response
 
 
@@ -202,80 +233,21 @@ def clip_response_to_text(response, text):
 
 
 def get_model_responses(model, input_ids, attention_mask):
-    output = model.generate(input_ids=input_ids, attention_mask=attention_mask, **gen_kwargs, max_length=input_ids.size(-1) + config["output_size"])
-    response = output[:, input_ids.size(-1):]
+    output = model.generate(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        **gen_kwargs,
+        max_length=input_ids.size(-1) + config["output_size"]
+    )
+    response = output[:, input_ids.size(-1) :]
     response_decoded = tokenizer.batch_decode(response)
-    return response, response_decoded
+    return output, response_decoded
 
 
-for epoch in range(total_epochs):
-    print(f"Epoch {epoch + 1}/{total_epochs}")
-
+def training_loop(dataloader):
+    total_ppo_steps = int(np.ceil(config["steps"] / config["batch_size"]))
     for step, batch in tqdm(zip(range(total_ppo_steps), iter(dataloader))):
-        logs, timing = dict(), dict()
-        t0 = time.time()
-
-        train_step(batch)
-
-        query_tensors = [torch.tensor(t).long().to(device) for t in batch["tokens"]]
-
-        model.eval()
-
-        #### Get response from gpt2
-        t = time.time()
-        response_tensors = []
-        for i in range(len(query_tensors)):
-            query_len = len(query_tensors[i])
-            response = model.generate(
-                query_tensors[i].unsqueeze(dim=0),
-                max_length=query_len + config["output_size"],
-                **gen_kwargs,
-            ).squeeze()
-            response_tensors.append(clip_response(response, query_len))
-
-        batch["response"] = [tokenizer.decode(r) for r in response_tensors]
-        timing["time/get_response"] = time.time() - t
-
-        #### Compute reward score
-        t = time.time()
-        rewards = torch.tensor(
-            [
-                calculate_reward(q, r, len(rt))
-                for q, r, rt in zip(
-                    batch["reward_input"], batch["response"], response_tensors
-                )
-            ]
-        ).to(device)
-        timing["time/get_reward_preds"] = time.time() - t
-
-        #### Run PPO step
-        t = time.time()
-        stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-        timing["time/optimization"] = time.time() - t
-
-        #### Log everything
-        timing["time/epoch"] = time.time() - t0
-        table_rows = [
-            list(r)
-            for r in zip(batch["query"], batch["response"], rewards.cpu().tolist())
-        ]
-        logs.update(
-            {
-                "game_log": wandb.Table(
-                    columns=["query", "response", "reward"], rows=table_rows
-                )
-            }
-        )
-        logs.update(timing)
-        logs.update(stats)
-        logs["env/reward_mean"] = torch.mean(rewards).cpu().numpy()
-        logs["env/reward_std"] = torch.std(rewards).cpu().numpy()
-        logs["env/reward_dist"] = rewards.cpu().numpy()
-
-        for key in logs:
-            if isinstance(logs[key], list):
-                if isinstance(logs[key][0], torch.Tensor):
-                    logs[key] = [array.cpu().numpy() for array in logs[key]]
+        logs = train_step(batch)
 
         if not step % config["eval_steps"]:
             logs.update(evaluate(eval_batch))
@@ -284,3 +256,14 @@ for epoch in range(total_epochs):
             save_checkpoint(ppo_trainer.model, ppo_trainer.optimizer, step)
 
         wandb.log(logs)
+
+
+if __name__ == "__main__":
+    reduce_randomness(42)
+
+    dataset = load_dataset(
+        "ChaiML/user_model_inputs", use_auth_token=config["auth_token"]
+    )
+    dataloader = torch.utils.data.DataLoader(dataset["train"], batch_size=config["batch_size"])
+
+    training_loop(dataloader)

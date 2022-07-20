@@ -57,10 +57,8 @@ def logprobs_from_logits(logits, labels):
     """
     See: https://github.com/pytorch/pytorch/issues/563#issuecomment-330103591
     """
-    logp = F.log_softmax(logits, dim=2)
-    logpy = torch.gather(logp, 2, labels.unsqueeze(2)).squeeze(-1)
-    return logpy
-
+    logprobs = logits.log_softmax(-1)
+    return torch.gather(logprobs, 2, labels.unsqueeze(-1)).squeeze(-1)
 
 def whiten(values, shift_mean=True):
     """Whiten values."""
