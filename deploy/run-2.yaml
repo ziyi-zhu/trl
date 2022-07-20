@@ -30,17 +30,21 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "gpt2-fixed-kl"
+          value: "adap-kl-ref-lit"
         - name: PROJECT_NAME
           value: "distil-ppo"
         - name: MODEL_NAME
           value: "ChaiML/distil-gpt2-lit"
         - name: REF_MODEL_NAME
-          value: "ChaiML/distil-gpt2-lit"
+          value: "hakurei/lit-6B"
+        - name: FP16
+          value: "True"
         - name: ADAP_KL_CTRL
-          value: "False"
+          value: "True"
         - name: INIT_KL_COEF
-          value: "0.2"
+          value: "0.1"
+        - name: TARGET
+          value: "10"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:

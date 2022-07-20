@@ -3,7 +3,7 @@ kind: Pod
 metadata:
   labels:
     qos.coreweave.cloud/latency: low
-  name: ppo-trainer-ziyi-run-4
+  name: ppo-trainer-ziyi-run-7
   namespace: tenant-chairesearch-test
 spec:
   volumes:
@@ -13,7 +13,7 @@ spec:
   imagePullSecrets:
       - name: docker-creds
   containers:
-    - name: ppo-trainer-container-ziyi-run-4
+    - name: ppo-trainer-container-ziyi-run-7
       image: gcr.io/chai-959f8/training:ppo-trainer-ziyi
       imagePullPolicy: Always
       resources:
@@ -30,23 +30,23 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "adap-kl-init-steps"
+          value: "run-debug"
         - name: PROJECT_NAME
-          value: "distil-ppo"
+          value: "gpt2-large-ppo"
         - name: MODEL_NAME
-          value: "ChaiML/distil-gpt2-lit"
+          value: "gpt2-large"
         - name: REF_MODEL_NAME
-          value: "hakurei/lit-6B"
+          value: "hakurei/litv2-6B-rev2"
         - name: FP16
           value: "True"
         - name: ADAP_KL_CTRL
           value: "True"
         - name: INIT_KL_COEF
-          value: "0.01"
+          value: "0.05"
         - name: TARGET
           value: "10"
-        - name: INIT_STEPS
-          value: "30"
+        - name: HORIZON
+          value: "10000"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:

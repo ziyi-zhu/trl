@@ -30,19 +30,25 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "run-6"
+          value: "adap-kl-init-steps"
         - name: PROJECT_NAME
-          value: "ppo-tuning"
-        - name: LR
-          value: "1e-6"
-        - name: PPO_EPOCHS
-          value: "8"
+          value: "distil-ppo"
+        - name: MODEL_NAME
+          value: "ChaiML/distil-gpt2-lit"
+        - name: REF_MODEL_NAME
+          value: "hakurei/lit-6B"
+        - name: FP16
+          value: "True"
         - name: ADAP_KL_CTRL
           value: "True"
         - name: INIT_KL_COEF
-          value: "0.1"
-        - name: BATCH_SIZE
-          value: "32"
+          value: "0.01"
+        - name: TARGET
+          value: "15"
+        - name: HORIZON
+          value: "1000"
+        - name: INIT_STEPS
+          value: "30"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:
