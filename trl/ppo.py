@@ -285,6 +285,7 @@ class PPOTrainer:
         logits = self.model(model_input).logits
         vpred = self.value_model(model_input)
         logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+        entropy = entropy_from_logits(logits)[:, -gen_len - 1 : -1]
 
         # only the generation part of the values/logprobs is needed
         logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
@@ -314,7 +315,6 @@ class PPOTrainer:
 
         loss = pg_loss + self.ppo_params["vf_coef"] * vf_loss
 
-        entropy = torch.mean(entropy_from_logits(logits))
         approxkl = 0.5 * torch.mean((logprob - old_logprobs) ** 2)
         policykl = torch.mean(logprob - old_logprobs)
         return_mean, return_var = torch.mean(returns), torch.var(returns)
@@ -323,7 +323,7 @@ class PPOTrainer:
         stats = dict(
             loss=dict(policy=pg_loss, value=vf_loss, total=loss),
             policy=dict(
-                entropy=entropy,
+                entropy=torch.mean(entropy),
                 approxkl=approxkl,
                 policykl=policykl,
                 clipfrac=pg_clipfrac,
