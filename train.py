@@ -36,6 +36,7 @@ config = {
     "tokenizer_name": str(os.environ.get("TOKENIZER_NAME", "gpt2")),
     "vf_model_name": str(os.environ.get("VF_MODEL_NAME", "gpt2")),
     "ref_model_name": str(os.environ.get("REF_MODEL_NAME", "gpt2")),
+    "fp16": (os.environ.get("FP16", "False") == "True"),
     "cls_model_name": str(
         os.environ.get("CLS_MODEL_NAME", "ChaiML/rewardModel90kEpoch2K1M3")
     ),
@@ -84,6 +85,9 @@ model = AutoModelForCausalLM.from_pretrained(
 model_ref = AutoModelForCausalLM.from_pretrained(
     config["ref_model_name"], use_auth_token=config["auth_token"]
 )
+
+if config["fp16"]:
+    model_ref = model_ref.half()
 
 tokenizer = AutoTokenizer.from_pretrained(config["tokenizer_name"])
 tokenizer.pad_token = tokenizer.eos_token
