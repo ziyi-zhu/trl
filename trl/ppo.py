@@ -123,9 +123,9 @@ class PPOTrainer:
         """
         Run a PPO optimisation step.
         """
-        logprobs, ref_logprobs, values = self.batched_forward_pass(input_ids)
+        logprobs, ref_logprobs, values = self.batched_forward_pass(input_ids, response_mask)
 
-        rewards, non_score_reward = self.compute_rewards(scores, logprobs, ref_logprobs)
+        rewards, non_score_reward = self.compute_rewards(scores, logprobs, ref_logprobs, response_mask)
 
         all_stats = []
         idxs = list(range(bs))
@@ -173,18 +173,18 @@ class PPOTrainer:
         return stats
 
     @torch.no_grad()
-    def batched_forward_pass(self, input_ids):
+    def batched_forward_pass(self, input_ids, response_mask):
         """Calculate model outputs in batches."""
         logits = self.model(input_ids).logits
         ref_logits = self.ref_model(input_ids).logits
-        values = self.value_model(input_ids)
 
         labels = input_ids.roll(-1)
-        logprobs = logprobs_from_logits(logits, labels)
-        ref_logprobs = logprobs_from_logits(ref_logits, labels)
-        import pdb; pdb.set_trace()
+        label_mask = response_mask.roll(-1)
 
-        return all_logprobs, all_ref_logprobs, all_values
+        values = self.value_model(input_ids) * label_mask
+        logprobs = logprobs_from_logits(logits, labels) * label_mask
+        ref_logprobs = logprobs_from_logits(ref_logits, labels) * label_mask
+        return logprobs, ref_logprobs, values
 
     def train_minibatch(self, logprobs, values, rewards, query, response, model_input):
         """Train one PPO minibatch"""
@@ -203,17 +203,15 @@ class PPOTrainer:
 
         return train_stats
 
-    def compute_rewards(self, scores, logprobs, ref_logprobs):
+    def compute_rewards(self, scores, logprobs, ref_logprobs, response_mask):
         """Compute per token rewards from scores and KL-penalty."""
-        rewards, non_score_rewards = [], []
-        for score, logprob, ref_logprob in zip(scores, logprobs, ref_logprobs):
-            kl = logprob - ref_logprob
-            non_score_reward = -self.kl_ctl.value * kl
-            non_score_rewards.append(non_score_reward)
-            reward = non_score_reward.clone()
-            reward[-1] += score
-            rewards.append(reward)
-        return rewards, non_score_rewards
+        kl = logprobs - ref_logprobs
+        kl_penalties = -self.kl_ctl.value * kl
+
+        label_mask = response_mask.roll(-1)
+        rewards = (kl_penalties + scores.unsqueeze(-1)) * label_mask
+        import pdb; pdb.set_trace()
+        return rewards, kl_penalties
 
     def loss(self, old_logprobs, values, rewards, query, response, model_input):
         """Calculate policy and value losses."""

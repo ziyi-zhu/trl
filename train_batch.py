@@ -154,7 +154,6 @@ def train_step(batch):
     response_mask = get_response_mask(model_output, responses, **batch_encoded)
     logs = ppo_trainer.step(model_output, response_mask, rewards)
     logs.update(get_train_logs(batch, responses, rewards))
-
     return logs
 
 
@@ -165,8 +164,11 @@ def get_response_mask(model_output, responses, input_ids, attention_mask):
         max_length=model_output.size(-1) - input_ids.size(-1),
         return_tensors="pt",
     )
-    import pdb; pdb.set_trace()
-    return input_ids
+    response_mask = torch.cat([
+        torch.zeros(input_ids.size()),
+        response_encoded.attention_mask.flip(-1),
+    ], dim=-1)
+    return response_mask.to(device)
 
 
 def get_train_logs(batch, responses, rewards):
