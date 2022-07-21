@@ -99,13 +99,28 @@ class PPOTrainer:
         """
         Run a PPO optimisation step.
         """
-        logprobs, ref_logprobs, values = self.batched_forward_pass(input_ids, attention_mask)
-        rewards, kl = self.compute_rewards(scores, logprobs, ref_logprobs, response_mask)
+        logprobs, ref_logprobs, values = self.batched_forward_pass(
+            input_ids, attention_mask
+        )
+        rewards, kl = self.compute_rewards(
+            scores, logprobs, ref_logprobs, response_mask
+        )
 
         all_stats = []
         for _ in range(self.ppo_params["ppo_epochs"]):
-            train_stats = self.train_minibatch(logprobs, values, rewards, input_ids, attention_mask, response_mask)
-            all_stats.append(train_stats)
+            batched_indices = torch.randperm(self.ppo_params["batch_size"]).view(
+                -1, self.ppo_params["mini_batch_size"]
+            )
+            for indices in batched_indices:
+                train_stats = self.train_minibatch(
+                    logprobs[indices],
+                    values[indices],
+                    rewards[indices],
+                    input_ids[indices],
+                    attention_mask[indices],
+                    response_mask[indices],
+                )
+                all_stats.append(train_stats)
         train_stats = stack_dicts(all_stats)
 
         label_mask = response_mask.roll(-1)
@@ -125,13 +140,15 @@ class PPOTrainer:
         logits = self.model(input_ids, attention_mask=attention_mask).logits
         ref_logits = self.ref_model(input_ids, attention_mask=attention_mask).logits
         values = self.value_model(input_ids, attention_mask=attention_mask)
-        
+
         labels = input_ids.roll(-1)
         logprobs = logprobs_from_logits(logits, labels)
         ref_logprobs = logprobs_from_logits(ref_logits, labels)
         return logprobs, ref_logprobs, values
 
-    def train_minibatch(self, logprobs, values, rewards, input_ids, attention_mask, response_mask):
+    def train_minibatch(
+        self, logprobs, values, rewards, input_ids, attention_mask, response_mask
+    ):
         """Train one PPO minibatch"""
         loss_p, loss_v, train_stats = self.loss(
             logprobs, values, rewards, input_ids, attention_mask, response_mask
@@ -154,16 +171,14 @@ class PPOTrainer:
 
         label_mask = response_mask.roll(-1)
         last_token_mask = self.get_last_token_mask(label_mask)
-        
-        rewards = (kl_penalties + last_token_mask * scores.unsqueeze(-1))
-        return rewards, kl
 
+        rewards = kl_penalties + last_token_mask * scores.unsqueeze(-1)
+        return rewards, kl
 
     def get_last_token_mask(self, label_mask):
         last_token_mask = label_mask - label_mask.roll(-1)
         last_token_mask[last_token_mask < 0] = 0
         return last_token_mask
-
 
     def estimate_advantages(self, values, rewards, response_mask):
         next_values = values.roll(-1)
@@ -176,7 +191,11 @@ class PPOTrainer:
         last_advantage_estimates = advantages.clone()
 
         for t in range(response_length):
-            last_advantage_estimates = self.ppo_params["gamma"] * self.ppo_params["lam"] * last_advantage_estimates.roll(-1)
+            last_advantage_estimates = (
+                self.ppo_params["gamma"]
+                * self.ppo_params["lam"]
+                * last_advantage_estimates.roll(-1)
+            )
             advantages += last_advantage_estimates
 
         return advantages * label_mask
@@ -199,17 +218,22 @@ class PPOTrainer:
         ratio = torch.exp(logprobs - old_logprobs)
 
         loss_1 = (-advantages * ratio).masked_select(label_mask.bool())
-        loss_2 = (-advantages * torch.clamp(
-            ratio,
-            1.0 - self.ppo_params["cliprange"],
-            1.0 + self.ppo_params["cliprange"],
-        )).masked_select(label_mask.bool())
+        loss_2 = (
+            -advantages
+            * torch.clamp(
+                ratio,
+                1.0 - self.ppo_params["cliprange"],
+                1.0 + self.ppo_params["cliprange"],
+            )
+        ).masked_select(label_mask.bool())
         loss = torch.mean(torch.max(loss_1, loss_2))
         clipfrac = torch.mean(torch.gt(loss_2, loss_1).double())
 
         return loss, clipfrac
 
-    def loss(self, old_logprobs, values, rewards, input_ids, attention_mask, response_mask):
+    def loss(
+        self, old_logprobs, values, rewards, input_ids, attention_mask, response_mask
+    ):
         """Calculate policy and value losses."""
         advantages = self.estimate_advantages(values, rewards, response_mask)
 
@@ -223,8 +247,12 @@ class PPOTrainer:
         labels = input_ids.roll(-1)
         logprobs = logprobs_from_logits(logits, labels)
 
-        vf_loss, vf_clipfrac = self.value_function_loss(vpreds, values, returns, label_mask)
-        pg_loss, pg_clipfrac = self.policy_gradient_loss(logprobs, old_logprobs, advantages, label_mask)
+        vf_loss, vf_clipfrac = self.value_function_loss(
+            vpreds, values, returns, label_mask
+        )
+        pg_loss, pg_clipfrac = self.policy_gradient_loss(
+            logprobs, old_logprobs, advantages, label_mask
+        )
 
         with torch.no_grad():
             entropy = torch.mean(entropy_from_logits(logits))
