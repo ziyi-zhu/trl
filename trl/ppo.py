@@ -102,16 +102,20 @@ class PPOTrainer:
         logprobs, ref_logprobs, values = self.batched_forward_pass(input_ids, attention_mask)
         rewards, kl = self.compute_rewards(scores, logprobs, ref_logprobs, response_mask)
 
+        all_stats = []
         for _ in range(self.ppo_params["ppo_epochs"]):
-            loss_p, loss_v, entropy = self.train_minibatch(logprobs, values, rewards, input_ids, attention_mask, response_mask)
+            train_stats = self.train_minibatch(logprobs, values, rewards, input_ids, attention_mask, response_mask)
+            all_stats.append(train_stats)
+        train_stats = stack_dicts(all_stats)
 
         label_mask = response_mask.roll(-1)
-        mean_kl = torch.mean(kl.masked_select(label_mask.bool())).item()
+        mean_kl = (kl * label_mask).sum(-1).mean().item()
 
         self.kl_ctl.update(mean_kl, self.ppo_params["batch_size"])
 
         stats = self.record_step_stats(
             mean_kl=mean_kl,
+            train_stats=train_stats,
         )
         return stats
 
@@ -129,7 +133,7 @@ class PPOTrainer:
 
     def train_minibatch(self, logprobs, values, rewards, input_ids, attention_mask, response_mask):
         """Train one PPO minibatch"""
-        loss_p, loss_v, entropy = self.loss(
+        loss_p, loss_v, train_stats = self.loss(
             logprobs, values, rewards, input_ids, attention_mask, response_mask
         )
 
@@ -141,7 +145,7 @@ class PPOTrainer:
         loss_v.backward()
         self.vf_optimizer.step()
 
-        return loss_p, loss_v, entropy
+        return train_stats
 
     def compute_rewards(self, scores, logprobs, ref_logprobs, response_mask):
         """Compute per token rewards from scores and KL-penalty."""
@@ -222,13 +226,28 @@ class PPOTrainer:
         vf_loss, vf_clipfrac = self.value_function_loss(vpreds, values, returns, label_mask)
         pg_loss, pg_clipfrac = self.policy_gradient_loss(logprobs, old_logprobs, advantages, label_mask)
 
-        entropy = torch.mean(entropy_from_logits(logits))
-        return pg_loss, vf_loss, entropy
+        with torch.no_grad():
+            entropy = torch.mean(entropy_from_logits(logits))
 
-    def record_step_stats(self, mean_kl):
+        stats = dict(
+            policy=dict(
+                loss=pg_loss,
+                entropy=entropy,
+                clipfrac=pg_clipfrac,
+            ),
+            value=dict(
+                loss=vf_loss,
+                clipfrac=vf_clipfrac,
+            ),
+        )
+        return pg_loss, vf_loss, flatten_dict(stats)
+
+    def record_step_stats(self, mean_kl, train_stats):
         """Record training step statistics."""
         stats = {
             "objective/kl": mean_kl,
             "objective/kl_coef": self.kl_ctl.value,
         }
+        for k, v in train_stats.items():
+            stats[f"ppo/{k}"] = torch.mean(v, axis=0)
         return stats
