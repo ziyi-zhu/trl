@@ -30,11 +30,23 @@ spec:
           mountPath: /models
       env:
         - name: RUN_NAME
-          value: "run-no-kl"
+          value: "batch-gpt-neo-1.3B"
         - name: PROJECT_NAME
-          value: "gpt2-ppo"
+          value: "batch_debug"
+        - name: MODEL_NAME
+          value: "EleutherAI/gpt-neo-1.3B"
+        - name: TOKENIZER_NAME
+          value: "EleutherAI/gpt-neo-1.3B"
+        - name: REF_MODEL_NAME
+          value: "EleutherAI/gpt-neo-1.3B"
+        - name: VF_MODEL_NAME
+          value: "EleutherAI/gpt-neo-125M"
+        - name: CLS_MODEL_NAME
+          value: "lvwerra/distilbert-imdb"
+        - name: CLS_TOKENIZER_NAME
+          value: "lvwerra/distilbert-imdb"
         - name: INIT_KL_COEF
-          value: "0.0"
+          value: "0.2"
         - name: STORAGE_URI
           value: pvc://model-storage/
       readinessProbe:

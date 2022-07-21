@@ -312,11 +312,11 @@ gen_kwargs = {
 value_model = GPT2HeadWithValueModel.from_pretrained(config["vf_model_name"]).to(device)
 
 reward_model = AutoModelForSequenceClassification.from_pretrained(
-    "lvwerra/distilbert-imdb", use_auth_token=config["auth_token"]
+    config["cls_model_name"], use_auth_token=config["auth_token"]
 ).to(device)
 
 reward_tokenizer = AutoTokenizer.from_pretrained(
-    "lvwerra/distilbert-imdb", truncation_side="left", padding_side="left"
+    config["cls_tokenizer_name"], truncation_side="left", padding_side="left"
 )
 
 ppo_trainer = PPOTrainer(model, model_ref, value_model, tokenizer, **config)
@@ -331,7 +331,7 @@ if __name__ == "__main__":
     )
 
     wandb.login(key=config["wandb_key"])
-    wandb.init(name=config["run_name"], project="batch-debug", config=config)
+    wandb.init(name=config["run_name"], project=config["project_name"], config=config)
     wandb.watch(model, log="all")
 
     training_loop(dataloader)
