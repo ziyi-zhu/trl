@@ -82,7 +82,6 @@ class PPOTrainer:
         self.value_model = value_model
         self.model = model
         self.tokenizer = tokenizer
-        self.data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
 
         self.optimizer = Adam(model.parameters(), lr=self.ppo_params["lr"])
         self.vf_optimizer = Adam(value_model.parameters(), lr=self.ppo_params["lr"])
@@ -95,9 +94,6 @@ class PPOTrainer:
             )
         else:
             self.kl_ctl = FixedKLController(self.ppo_params["init_kl_coef"])
-
-        self.steps = 0
-        self.init_steps = ppo_params["init_steps"]
 
     def step(self, input_ids, attention_mask, response_mask, scores):
         """
@@ -112,9 +108,7 @@ class PPOTrainer:
         label_mask = response_mask.roll(-1)
         mean_kl = torch.mean(kl.masked_select(label_mask.bool())).item()
 
-        if self.steps >= self.init_steps:
-            self.kl_ctl.update(mean_kl, self.ppo_params["batch_size"])
-        self.steps += 1
+        self.kl_ctl.update(mean_kl, self.ppo_params["batch_size"])
 
         stats = self.record_step_stats(
             mean_kl=mean_kl,
@@ -141,8 +135,7 @@ class PPOTrainer:
 
         self.optimizer.zero_grad()
         loss_p.backward()
-        if self.steps >= self.init_steps:
-            self.optimizer.step()
+        self.optimizer.step()
 
         self.vf_optimizer.zero_grad()
         loss_v.backward()

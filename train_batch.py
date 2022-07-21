@@ -42,7 +42,6 @@ config = {
     "eval_steps": int(os.environ.get("EVAL_STEPS", 10)),
     "checkpoint_steps": int(os.environ.get("CHECKPOINT_STEPS", 30)),
     "batch_size": int(os.environ.get("BATCH_SIZE", 32)),
-    "minibatch_size": int(os.environ.get("MINIBATCH_SIZE", 4)),
     "ppo_epochs": int(os.environ.get("PPO_EPOCHS", 4)),
     "input_size": int(os.environ.get("INPUT_SIZE", 960)),
     "output_size": int(os.environ.get("OUTPUT_SIZE", 32)),
@@ -103,11 +102,14 @@ def train_step(batch):
     model_output, responses = get_model_responses(model, **batch_encoded)
 
     responses = [format_response(response) for response in responses]
-    rewards, preds = compute_rewards(batch, responses)
-
     output_attention_mask, response_mask = get_response_mask(model_output, responses, **batch_encoded)
+
+    response_sizes = response_mask.sum(-1)
+    rewards, preds = compute_rewards(batch, responses, response_sizes)
+
     logs = ppo_trainer.step(model_output, output_attention_mask.to(device), response_mask.to(device), rewards)
-    logs.update(get_train_logs(batch, responses, rewards))
+
+    logs.update(get_train_logs(batch, responses, rewards, preds))
     return logs
 
 
@@ -115,6 +117,7 @@ def get_response_mask(model_output, responses, input_ids, attention_mask):
     response_encoded = tokenizer(
         responses,
         padding="max_length",
+        truncation=True,
         max_length=model_output.size(-1) - input_ids.size(-1),
         return_tensors="pt",
     )
@@ -130,25 +133,28 @@ def get_response_mask(model_output, responses, input_ids, attention_mask):
     return output_attention_mask, response_mask
 
 
-def get_train_logs(batch, responses, rewards):
+def get_train_logs(batch, responses, rewards, preds):
     logs = dict()
-    logs["response_log"] = get_response_table(batch, responses, rewards)
+    logs["response_log"] = get_response_table(batch, responses, rewards, preds)
+    logs["train/preds_mean"] = torch.mean(preds).cpu().numpy()
+    logs["train/preds_std"] = torch.mean(preds).cpu().numpy()
     logs["train/reward_mean"] = torch.mean(rewards).cpu().numpy()
     logs["train/reward_std"] = torch.std(rewards).cpu().numpy()
-    logs["train/reward_dist"] = rewards.cpu().numpy()
     return logs
 
 
-def get_response_table(batch, responses, rewards):
-    table_rows = [
-        [text, response, reward.item()]
-        for text, response, reward in zip(batch["text"], responses, rewards)
-    ]
-    return wandb.Table(columns=["text", "response", "reward"], rows=table_rows)
+def get_response_table(batch, responses, rewards, preds):
+    df_results = pd.DataFrame({
+        "text": batch["text"],
+        "response": responses,
+        "reward": rewards.cpu().tolist(),
+        "pred": preds.cpu().tolist(),
+    })
+    return wandb.Table(dataframe=df_results)
 
 
 @torch.no_grad()
-def compute_rewards(batch, responses):
+def compute_rewards(batch, responses, response_sizes):
     reward_inputs = [
         reward_input + response
         for reward_input, response in zip(batch["reward_input"], responses)
@@ -161,21 +167,17 @@ def compute_rewards(batch, responses):
         return_tensors="pt",
     ).to(device)
     logits = reward_model(**input_encoded).logits
-    return calculate_reward_score(logits)
+    return calculate_reward_score(logits, response_sizes)
 
 
-def calculate_reward_score(logits):
+def calculate_reward_score(logits, response_sizes):
     preds = torch.softmax(logits, dim=1)
-    rewards = shifted_logits_with_penalty(inverse_sigmoid(preds))
-    return rewards[:, 1], preds[:, 1]
-
-
-def shifted_logits_with_penalty(logits):
-    return (
-        logits
+    rewards = (
+        inverse_sigmoid(preds)
         + config["cls_shift"]
-        #        - config["cls_penal_coef"] * np.exp(1 - response_len)
+        - config["cls_penal_coef"] * torch.exp(1 - response_sizes).unsqueeze(-1).to(device)
     )
+    return rewards[:, 1], preds[:, 1]
 
 
 def inverse_sigmoid(preds):
@@ -216,7 +218,7 @@ def training_loop(dataloader):
         # if not step % config["checkpoint_steps"]:
         #     save_checkpoint(ppo_trainer.model, ppo_trainer.optimizer, step)
 
-        # wandb.log(logs)
+        wandb.log(logs)
 
 
 reduce_randomness(42)
@@ -267,8 +269,8 @@ if __name__ == "__main__":
     )
     dataloader = torch.utils.data.DataLoader(dataset["train"], batch_size=config["batch_size"])
 
-    # wandb.login(key=config["wandb_key"])
-    # wandb.init(name=config["run_name"], project=config["project_name"], config=config)
-    # wandb.watch(model, log="all")
+    wandb.login(key=config["wandb_key"])
+    wandb.init(name=config["run_name"], project="batch-debug", config=config)
+    wandb.watch(model, log="all")
 
     training_loop(dataloader)
