@@ -14,7 +14,7 @@ from transformers import (
     AutoModelForCausalLM,
 )
 
-from trl.gpt2 import GPT2HeadWithValueModel
+from trl.model import GPTNeoHeadWithValueModel
 from trl.ppo import PPOTrainer
 
 
@@ -41,7 +41,8 @@ config = {
     "epochs": int(os.environ.get("EPOCHS", 5)),
     "eval_steps": int(os.environ.get("EVAL_STEPS", 10)),
     "checkpoint_steps": int(os.environ.get("CHECKPOINT_STEPS", 30)),
-    "batch_size": int(os.environ.get("BATCH_SIZE", 4)),
+    "batch_size": int(os.environ.get("BATCH_SIZE", 32)),
+    "mini_batch_size": int(os.environ.get("MINI_BATCH_SIZE", 1)),
     "eval_batch_size": int(os.environ.get("EVAL_BATCH_SIZE", 32)),
     "ppo_epochs": int(os.environ.get("PPO_EPOCHS", 4)),
     "input_size": int(os.environ.get("INPUT_SIZE", 960)),
@@ -150,11 +151,9 @@ def get_response_mask(model_output, responses, input_ids, attention_mask):
 
 def get_train_logs(batch, responses, rewards, preds):
     logs = dict()
-    logs["response_log"] = get_response_table(batch, responses, rewards, preds)
-    logs["train/preds_mean"] = torch.mean(preds).cpu().numpy()
-    logs["train/preds_std"] = torch.mean(preds).cpu().numpy()
-    logs["train/reward_mean"] = torch.mean(rewards).cpu().numpy()
-    logs["train/reward_std"] = torch.std(rewards).cpu().numpy()
+    logs["train/response_log"] = get_response_table(batch, responses, rewards, preds)
+    logs["train/mean_prediction"] = torch.mean(preds).cpu().numpy()
+    logs["train/mean_reward"] = torch.mean(rewards).cpu().numpy()
     return logs
 
 
@@ -164,7 +163,7 @@ def get_response_table(batch, responses, rewards, preds):
             "text": batch["text"],
             "response": responses,
             "reward": rewards.cpu().tolist(),
-            "pred": preds.cpu().tolist(),
+            "prediction": preds.cpu().tolist(),
         }
     )
     return wandb.Table(dataframe=df_results)
@@ -257,27 +256,41 @@ def evaluate_step(batch):
     rewards, preds = compute_rewards(batch, responses)
     ref_rewards, ref_preds = compute_rewards(batch, ref_responses)
 
-    logs = dict()
+    logs = get_evaluation_logs(
+        batch,
+        responses=responses,
+        ref_responses=ref_responses,
+        rewards=rewards,
+        preds=preds,
+        ref_rewards=ref_rewards,
+        ref_preds=ref_preds
+    )
+    return logs
 
+
+def get_evaluation_logs(batch, **data):
+    logs = dict()
+    logs["evaluation/comparison_log"] = get_comparison_table(batch, **data)
+    logs["evaluation/ref_mean_prediction"] = torch.mean(data["ref_preds"]).cpu().numpy()
+    logs["evaluation/ref_mean_reward"] = torch.mean(data["ref_rewards"]).cpu().numpy()
+    logs["evaluation/ppo_mean_prediction"] = torch.mean(data["preds"]).cpu().numpy()
+    logs["evaluation/ppo_mean_reward"] = torch.mean(data["rewards"]).cpu().numpy()
+    return logs
+
+
+def get_comparison_table(batch, **data):
     df_results = pd.DataFrame(
         {
             "text": batch["text"],
-            "ppo_response": responses,
-            "original_response": ref_responses,
-            "ppo_reward": rewards.cpu().tolist(),
-            "ppo_pred": preds.cpu().tolist(),
-            "original_reward": ref_rewards.cpu().tolist(),
-            "original_pred": ref_preds.cpu().tolist(),
+            "ppo_response": data["responses"],
+            "ref_response": data["ref_responses"],
+            "ppo_reward": data["rewards"].cpu().tolist(),
+            "ppo_prediction": data["preds"].cpu().tolist(),
+            "ref_reward": data["ref_rewards"].cpu().tolist(),
+            "ref_prediction": data["ref_preds"].cpu().tolist(),
         }
     )
-    logs["evaluation/comparison_log"] = wandb.Table(dataframe=df_results)
-
-    logs["evaluation/original_pred_mean"] = torch.mean(ref_preds).cpu().numpy()
-    logs["evaluation/original_reward_mean"] = torch.mean(ref_rewards).cpu().numpy()
-    logs["evaluation/ppo_pred_mean"] = torch.mean(preds).cpu().numpy()
-    logs["evaluation/ppo_reward_mean"] = torch.mean(rewards).cpu().numpy()
-
-    return logs
+    return wandb.Table(dataframe=df_results)
 
 
 reduce_randomness(42)
@@ -309,7 +322,7 @@ gen_kwargs = {
     "pad_token_id": tokenizer.eos_token_id,
 }
 
-value_model = GPT2HeadWithValueModel.from_pretrained(config["vf_model_name"]).to(device)
+value_model = GPTNeoHeadWithValueModel.from_pretrained(config["vf_model_name"]).to(device)
 
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     config["cls_model_name"], use_auth_token=config["auth_token"]
