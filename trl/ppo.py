@@ -74,26 +74,6 @@ class PPOTrainer:
     def __init__(self, model, ref_model, value_model, tokenizer, **ppo_params):
         """
         Initialize PPOTrainer.
-
-        Args:
-            model (torch.model): Hugging Face transformer GPT2 model with value head
-            ref_model (torch.model): Hugging Face transformer GPT2 refrence model used for KL penalty
-            tokenizer (tokenizer): Hugging Face tokenizer
-            ppo_params (dict or None): PPO parameters for training. Can include following keys:
-                'lr' (float): Adam learning rate, default: 1.41e-5
-                'batch_size' (int): Number of samples per optimisation step, default: 256
-                'forward_batch_size' (int): Number of samples forward passed through model at a time, default: 16
-                'ppo_epochs' (int): Number of optimisation epochs per batch of samples, default: 4
-                'gamma' (float)): Gamma parameter for advantage calculation, default: 1.
-                'lam' (float): Lambda parameter for advantage calcualation, default: 0.95
-                'cliprange_value' (float): Range for clipping values in loss calculation, default: 0.2
-                'cliprange' (float): Range for clipping in PPO policy gradient loss, default: 0.2
-                'vf_coef' (float): Scaling factor for value loss, default: 0.1
-                'adap_kl_ctrl' (bool): Use adaptive KL control, otherwise linear, default: True
-                'init_kl_coef' (float): Initial KL penalty coefficient (used for adaptive and linear control), default: 0.2
-                'target' (float): Target KL value for adaptive KL control, default: 6.0
-                'horizon' (float): Horizon for adaptive KL control, default: 10000
-
         """
         self.ppo_params = self.default_params
         self.ppo_params.update(ppo_params)
@@ -119,47 +99,44 @@ class PPOTrainer:
         self.steps = 0
         self.init_steps = ppo_params["init_steps"]
 
-    def step(self, input_ids, response_mask, scores):
+    def step(self, input_ids, attention_mask, response_mask, scores):
         """
         Run a PPO optimisation step.
         """
-        logprobs, ref_logprobs, values = self.batched_forward_pass(input_ids)
-        rewards, kl_penalties = self.compute_rewards(scores, logprobs, ref_logprobs, response_mask)
+        logprobs, ref_logprobs, values = self.batched_forward_pass(input_ids, attention_mask)
+        rewards, kl = self.compute_rewards(scores, logprobs, ref_logprobs, response_mask)
 
-        import pdb; pdb.set_trace()
-
-        all_stats = []
         for _ in range(self.ppo_params["ppo_epochs"]):
-            for minibatch in self.get_minibatches(input_ids, logprobs, values, rewards, batch_size=ppo_params["minibatch_size"]):
-                train_stats = self.train_minibatch(**minibatch)
-                all_stats.append(train_stats)
-        train_stats = stack_dicts(all_stats)
+            loss_p, loss_v, entropy = self.train_minibatch(logprobs, values, rewards, input_ids, attention_mask, response_mask)
+
+        label_mask = response_mask.roll(-1)
+        mean_kl = torch.mean(kl.masked_select(label_mask.bool())).item()
 
         if self.steps >= self.init_steps:
-            self.kl_ctl.update(stats["objective/kl"], self.ppo_params["batch_size"])
+            self.kl_ctl.update(mean_kl, self.ppo_params["batch_size"])
         self.steps += 1
 
+        stats = self.record_step_stats(
+            mean_kl=mean_kl,
+        )
         return stats
 
-    def get_minibatches(self, input_ids, logprobs, values, rewards, batch_size):
-        batch = dict()
-
     @torch.no_grad()
-    def batched_forward_pass(self, input_ids):
+    def batched_forward_pass(self, input_ids, attention_mask):
         """Calculate model outputs in batches."""
-        logits = self.model(input_ids).logits
-        ref_logits = self.ref_model(input_ids).logits
-        values = self.value_model(input_ids)
+        logits = self.model(input_ids, attention_mask=attention_mask).logits
+        ref_logits = self.ref_model(input_ids, attention_mask=attention_mask).logits
+        values = self.value_model(input_ids, attention_mask=attention_mask)
         
         labels = input_ids.roll(-1)
         logprobs = logprobs_from_logits(logits, labels)
         ref_logprobs = logprobs_from_logits(ref_logits, labels)
         return logprobs, ref_logprobs, values
 
-    def train_minibatch(self, logprobs, values, rewards, input_ids):
+    def train_minibatch(self, logprobs, values, rewards, input_ids, attention_mask, response_mask):
         """Train one PPO minibatch"""
-        loss_p, loss_v, train_stats = self.loss(
-            logprobs, values, rewards, input_ids
+        loss_p, loss_v, entropy = self.loss(
+            logprobs, values, rewards, input_ids, attention_mask, response_mask
         )
 
         self.optimizer.zero_grad()
@@ -171,7 +148,7 @@ class PPOTrainer:
         loss_v.backward()
         self.vf_optimizer.step()
 
-        return train_stats
+        return loss_p, loss_v, entropy
 
     def compute_rewards(self, scores, logprobs, ref_logprobs, response_mask):
         """Compute per token rewards from scores and KL-penalty."""
@@ -179,120 +156,86 @@ class PPOTrainer:
         kl_penalties = -self.kl_ctl.value * kl
 
         label_mask = response_mask.roll(-1)
-        rewards = (kl_penalties + scores.unsqueeze(-1)) * label_mask
-        return rewards, kl_penalties
+        last_token_mask = self.get_last_token_mask(label_mask)
+        
+        rewards = (kl_penalties + last_token_mask * scores.unsqueeze(-1))
+        return rewards, kl
 
-    def loss(self, old_logprobs, values, rewards, input_ids):
-        """Calculate policy and value losses."""
-        lastgaelam = 0
-        advantages_reversed = []
-        gen_len = response.shape[1]
 
-        for t in reversed(range(gen_len)):
-            nextvalues = values[:, t + 1] if t < gen_len - 1 else 0.0
-            delta = rewards[:, t] + self.ppo_params["gamma"] * nextvalues - values[:, t]
-            lastgaelam = (
-                delta + self.ppo_params["gamma"] * self.ppo_params["lam"] * lastgaelam
-            )
-            advantages_reversed.append(lastgaelam)
-        advantages = torch.stack(advantages_reversed[::-1]).transpose(0, 1)
+    def get_last_token_mask(self, label_mask):
+        last_token_mask = label_mask - label_mask.roll(-1)
+        last_token_mask[last_token_mask < 0] = 0
+        return last_token_mask
 
-        returns = advantages + values
-        if gen_len > 1:
-            advantages = whiten(advantages)
-        advantages = advantages.detach()
 
-        logits = self.model(model_input).logits
-        vpred = self.value_model(model_input)
-        logprob = logprobs_from_logits(logits[:, :-1, :], model_input[:, 1:])
+    def estimate_advantages(self, values, rewards, response_mask):
+        next_values = values.roll(-1)
+        delta = rewards + self.ppo_params["gamma"] * next_values - values
 
-        # only the generation part of the values/logprobs is needed
-        logprob, vpred = logprob[:, -gen_len:], vpred[:, -gen_len - 1 : -1]
+        label_mask = response_mask.roll(-1)
+        response_length = response_mask.sum(-1).max().item()
 
-        vpredclipped = clip_by_value(
-            vpred,
+        advantages = delta * label_mask
+        last_advantage_estimates = advantages.clone()
+
+        for t in range(response_length):
+            last_advantage_estimates = self.ppo_params["gamma"] * self.ppo_params["lam"] * last_advantage_estimates.roll(-1)
+            advantages += last_advantage_estimates
+
+        return advantages * label_mask
+
+    def value_function_loss(self, vpreds, values, returns, label_mask):
+        vpreds_clipped = clip_by_value(
+            vpreds,
             values - self.ppo_params["cliprange_value"],
             values + self.ppo_params["cliprange_value"],
         )
 
-        vf_losses1 = (vpred - returns) ** 2
-        vf_losses2 = (vpredclipped - returns) ** 2
-        vf_loss = 0.5 * torch.mean(torch.max(vf_losses1, vf_losses2))
-        vf_clipfrac = torch.mean(torch.gt(vf_losses2, vf_losses1).double())
+        loss_1 = ((vpreds - returns) ** 2).masked_select(label_mask.bool())
+        loss_2 = ((vpreds_clipped - returns) ** 2).masked_select(label_mask.bool())
+        loss = 0.5 * torch.mean(torch.max(loss_1, loss_2))
+        clipfrac = torch.mean(torch.gt(loss_2, loss_1).double())
 
-        ratio = torch.exp(logprob - old_logprobs)
+        return loss, clipfrac
 
-        pg_losses = -advantages * ratio
-        pg_losses2 = -advantages * torch.clamp(
+    def policy_gradient_loss(self, logprobs, old_logprobs, advantages, label_mask):
+        ratio = torch.exp(logprobs - old_logprobs)
+
+        loss_1 = (-advantages * ratio).masked_select(label_mask.bool())
+        loss_2 = (-advantages * torch.clamp(
             ratio,
             1.0 - self.ppo_params["cliprange"],
             1.0 + self.ppo_params["cliprange"],
-        )
+        )).masked_select(label_mask.bool())
+        loss = torch.mean(torch.max(loss_1, loss_2))
+        clipfrac = torch.mean(torch.gt(loss_2, loss_1).double())
 
-        pg_loss = torch.mean(torch.max(pg_losses, pg_losses2))
-        pg_clipfrac = torch.mean(torch.gt(pg_losses2, pg_losses).double())
+        return loss, clipfrac
 
-        loss = pg_loss + self.ppo_params["vf_coef"] * vf_loss
+    def loss(self, old_logprobs, values, rewards, input_ids, attention_mask, response_mask):
+        """Calculate policy and value losses."""
+        advantages = self.estimate_advantages(values, rewards, response_mask)
+
+        label_mask = response_mask.roll(-1)
+        returns = advantages + values
+        advantages = whiten(advantages, label_mask)
+
+        logits = self.model(input_ids, attention_mask=attention_mask).logits
+        vpreds = self.value_model(input_ids, attention_mask=attention_mask)
+
+        labels = input_ids.roll(-1)
+        logprobs = logprobs_from_logits(logits, labels)
+
+        vf_loss, vf_clipfrac = self.value_function_loss(vpreds, values, returns, label_mask)
+        pg_loss, pg_clipfrac = self.policy_gradient_loss(logprobs, old_logprobs, advantages, label_mask)
 
         entropy = torch.mean(entropy_from_logits(logits))
-        approxkl = 0.5 * torch.mean((logprob - old_logprobs) ** 2)
-        policykl = torch.mean(logprob - old_logprobs)
-        return_mean, return_var = torch.mean(returns), torch.var(returns)
-        value_mean, value_var = torch.mean(values), torch.var(values)
+        return pg_loss, vf_loss, entropy
 
-        stats = dict(
-            loss=dict(policy=pg_loss, value=vf_loss, total=loss),
-            policy=dict(
-                entropy=entropy,
-                approxkl=approxkl,
-                policykl=policykl,
-                clipfrac=pg_clipfrac,
-                advantages=advantages,
-                advantages_mean=torch.mean(advantages),
-                ratio=ratio,
-            ),
-            returns=dict(mean=return_mean, var=return_var),
-            val=dict(
-                vpred=torch.mean(vpred),
-                error=torch.mean((vpred - returns) ** 2),
-                clipfrac=vf_clipfrac,
-                mean=value_mean,
-                var=value_var,
-            ),
-        )
-        return pg_loss, self.ppo_params["vf_coef"] * vf_loss, flatten_dict(stats)
-
-    def record_step_stats(self, kl_coef, **data):
+    def record_step_stats(self, mean_kl):
         """Record training step statistics."""
-        kl_list = [
-            logprobs - ref_logprobs
-            for logprobs, ref_logprobs in zip(data["logprobs"], data["ref_logprobs"])
-        ]
-        mean_kl = torch.mean(torch.stack([torch.sum(kl) for kl in kl_list]))
-        mean_entropy = torch.mean(
-            torch.stack([torch.sum(-log_probs) for log_probs in data["logprobs"]])
-        )
-        mean_non_score_reward = torch.mean(
-            torch.stack(
-                [
-                    torch.sum(non_score_reward)
-                    for non_score_reward in data["non_score_reward"]
-                ]
-            )
-        )
         stats = {
             "objective/kl": mean_kl,
-            "objective/kl_dist": kl_list,
-            "objective/logprobs": data["logprobs"],
-            "objective/ref_logprobs": data["ref_logprobs"],
-            "objective/kl_coef": kl_coef,
-            "objective/entropy": mean_entropy,
-            "ppo/mean_non_score_reward": mean_non_score_reward,
+            "objective/kl_coef": self.kl_ctl.value,
         }
-
-        for k, v in data["train_stats"].items():
-            stats[f"ppo/{k}"] = torch.mean(v, axis=0)
-        stats["ppo/val/var_explained"] = (
-            1 - stats["ppo/val/error"] / stats["ppo/returns/var"]
-        )
         return stats

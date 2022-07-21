@@ -62,52 +62,6 @@ config = {
     "top_p": float(os.environ.get("TOP_P", 1.0)),
 }
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# wandb.login(key=config["wandb_key"])
-# wandb.init(name=config["run_name"], project=config["project_name"], config=config)
-
-model = AutoModelForCausalLM.from_pretrained(
-    config["model_name"], use_auth_token=config["auth_token"]
-)
-model_ref = AutoModelForCausalLM.from_pretrained(
-    config["ref_model_name"], use_auth_token=config["auth_token"]
-)
-
-tokenizer = AutoTokenizer.from_pretrained(
-    config["tokenizer_name"],
-    truncation_size="left",
-    padding_side="left",
-)
-tokenizer.pad_token = tokenizer.eos_token
-
-# wandb.watch(model, log="all")
-
-model.to(device)
-model_ref.to(device)
-
-gen_kwargs = {
-    "min_length": -1,
-    "temperature": config["temperature"],
-    "top_k": config["top_k"],
-    "top_p": config["top_p"],
-    "do_sample": True,
-    "pad_token_id": tokenizer.eos_token_id,
-}
-
-value_model = GPT2HeadWithValueModel.from_pretrained(config["vf_model_name"]).to(device)
-
-reward_model = AutoModelForSequenceClassification.from_pretrained(
-    config["cls_model_name"], use_auth_token=config["auth_token"]
-).to(device)
-
-reward_tokenizer = AutoTokenizer.from_pretrained(
-    config["cls_tokenizer_name"], truncation_side="left", padding_side="left"
-)
-
-ppo_trainer = PPOTrainer(model, model_ref, value_model, tokenizer, **config)
-
-
 def reduce_randomness(seed=0):
     torch.manual_seed(seed)
     random.seed(seed)
@@ -151,8 +105,8 @@ def train_step(batch):
     responses = [format_response(response) for response in responses]
     rewards, preds = compute_rewards(batch, responses)
 
-    response_mask = get_response_mask(model_output, responses, **batch_encoded)
-    logs = ppo_trainer.step(model_output, response_mask, rewards)
+    output_attention_mask, response_mask = get_response_mask(model_output, responses, **batch_encoded)
+    logs = ppo_trainer.step(model_output, output_attention_mask.to(device), response_mask.to(device), rewards)
     logs.update(get_train_logs(batch, responses, rewards))
     return logs
 
@@ -164,11 +118,16 @@ def get_response_mask(model_output, responses, input_ids, attention_mask):
         max_length=model_output.size(-1) - input_ids.size(-1),
         return_tensors="pt",
     )
+    response_attention_mask = response_encoded.attention_mask.flip(-1)
     response_mask = torch.cat([
-        torch.zeros(input_ids.size()),
-        response_encoded.attention_mask.flip(-1),
-    ], dim=-1)
-    return response_mask.to(device)
+        torch.zeros(attention_mask.size()),
+        response_attention_mask,
+    ], dim=-1).int()
+    output_attention_mask = torch.cat([
+        attention_mask.cpu(),
+        response_attention_mask,
+    ], dim=-1).int()
+    return output_attention_mask, response_mask
 
 
 def get_train_logs(batch, responses, rewards):
@@ -251,21 +210,65 @@ def training_loop(dataloader):
     for step, batch in tqdm(zip(range(total_ppo_steps), iter(dataloader))):
         logs = train_step(batch)
 
-        if not step % config["eval_steps"]:
-            logs.update(evaluate(eval_batch))
+        # if not step % config["eval_steps"]:
+        #     logs.update(evaluate(eval_batch))
 
-        if not step % config["checkpoint_steps"]:
-            save_checkpoint(ppo_trainer.model, ppo_trainer.optimizer, step)
+        # if not step % config["checkpoint_steps"]:
+        #     save_checkpoint(ppo_trainer.model, ppo_trainer.optimizer, step)
 
-        wandb.log(logs)
+        # wandb.log(logs)
+
+
+reduce_randomness(42)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+model = AutoModelForCausalLM.from_pretrained(
+    config["model_name"], use_auth_token=config["auth_token"]
+)
+model_ref = AutoModelForCausalLM.from_pretrained(
+    config["ref_model_name"], use_auth_token=config["auth_token"]
+)
+
+tokenizer = AutoTokenizer.from_pretrained(
+    config["tokenizer_name"],
+    truncation_size="left",
+    padding_side="left",
+)
+tokenizer.pad_token = tokenizer.eos_token
+
+model.to(device)
+model_ref.to(device)
+
+gen_kwargs = {
+    "min_length": -1,
+    "temperature": config["temperature"],
+    "top_k": config["top_k"],
+    "top_p": config["top_p"],
+    "do_sample": True,
+    "pad_token_id": tokenizer.eos_token_id,
+}
+
+value_model = GPT2HeadWithValueModel.from_pretrained(config["vf_model_name"]).to(device)
+
+reward_model = AutoModelForSequenceClassification.from_pretrained(
+    config["cls_model_name"], use_auth_token=config["auth_token"]
+).to(device)
+
+reward_tokenizer = AutoTokenizer.from_pretrained(
+    config["cls_tokenizer_name"], truncation_side="left", padding_side="left"
+)
+
+ppo_trainer = PPOTrainer(model, model_ref, value_model, tokenizer, **config)
 
 
 if __name__ == "__main__":
-    reduce_randomness(42)
-
     dataset = load_dataset(
         "ChaiML/user_model_inputs", use_auth_token=config["auth_token"]
     )
     dataloader = torch.utils.data.DataLoader(dataset["train"], batch_size=config["batch_size"])
+
+    # wandb.login(key=config["wandb_key"])
+    # wandb.init(name=config["run_name"], project=config["project_name"], config=config)
+    # wandb.watch(model, log="all")
 
     training_loop(dataloader)

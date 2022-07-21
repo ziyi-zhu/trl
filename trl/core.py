@@ -60,13 +60,14 @@ def logprobs_from_logits(logits, labels):
     logprobs = logits.log_softmax(-1)
     return torch.gather(logprobs, 2, labels.unsqueeze(-1)).squeeze(-1)
 
-def whiten(values, shift_mean=True):
+def whiten(values, label_mask, shift_mean=True):
     """Whiten values."""
-    mean, var = torch.mean(values), torch.var(values)
+    masked_values = values.masked_select(label_mask.bool())
+    mean, var = torch.mean(masked_values), torch.var(masked_values)
     whitened = (values - mean) * torch.rsqrt(var + 1e-8)
     if not shift_mean:
         whitened += mean
-    return whitened
+    return whitened * label_mask
 
 def clip_by_value(x, tensor_min, tensor_max):
     """
@@ -78,9 +79,9 @@ def clip_by_value(x, tensor_min, tensor_max):
 
 def entropy_from_logits(logits):
     """Calculate entropy from logits."""
-    pd = torch.nn.functional.softmax(logits, dim=-1)
-    entropy = torch.logsumexp(logits, axis=-1) - torch.sum(pd*logits, axis=-1)
-    return entropy
+    probs = logits.softmax(-1)
+    logprobs = logits.log_softmax(-1)
+    return -torch.sum(probs * logprobs, axis=-1)
 
 
 def average_torch_dicts(list_of_dicts):
