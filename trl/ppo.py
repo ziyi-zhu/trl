@@ -123,48 +123,17 @@ class PPOTrainer:
         """
         Run a PPO optimisation step.
         """
-        logprobs, ref_logprobs, values = self.batched_forward_pass(input_ids, response_mask)
+        logprobs, ref_logprobs, values = self.batched_forward_pass(input_ids)
+        rewards, kl_penalties = self.compute_rewards(scores, logprobs, ref_logprobs, response_mask)
 
-        rewards, non_score_reward = self.compute_rewards(scores, logprobs, ref_logprobs, response_mask)
+        import pdb; pdb.set_trace()
 
         all_stats = []
-        idxs = list(range(bs))
         for _ in range(self.ppo_params["ppo_epochs"]):
-            random.shuffle(idxs)
-            for i in range(bs):
-                idx = idxs[i]
-                train_stats = self.train_minibatch(
-                    logprobs[idx].unsqueeze(0),
-                    values[idx].unsqueeze(0),
-                    rewards[idx].unsqueeze(0),
-                    queries[idx].unsqueeze(0),
-                    responses[idx].unsqueeze(0),
-                    torch.cat([queries[idx], responses[idx]]).unsqueeze(0),
-                )
+            for minibatch in self.get_minibatches(input_ids, logprobs, values, rewards, batch_size=ppo_params["minibatch_size"]):
+                train_stats = self.train_minibatch(**minibatch)
                 all_stats.append(train_stats)
-
         train_stats = stack_dicts(all_stats)
-
-        # reshape advantages/ratios such that they are not averaged.
-        train_stats["policy/advantages"] = torch.flatten(
-            train_stats["policy/advantages"]
-        ).unsqueeze(0)
-        train_stats["policy/advantages"] = torch.nan_to_num(
-            train_stats["policy/advantages"], WANDB_PADDING
-        )
-        train_stats["policy/ratio"] = torch.flatten(
-            train_stats["policy/ratio"]
-        ).unsqueeze(0)
-
-        stats = self.record_step_stats(
-            scores=scores,
-            logprobs=logprobs,
-            ref_logprobs=ref_logprobs,
-            non_score_reward=non_score_reward,
-            train_stats=train_stats,
-            kl_coef=self.kl_ctl.value,
-        )
-        stats = stats_to_np(stats)
 
         if self.steps >= self.init_steps:
             self.kl_ctl.update(stats["objective/kl"], self.ppo_params["batch_size"])
@@ -172,24 +141,25 @@ class PPOTrainer:
 
         return stats
 
+    def get_minibatches(self, input_ids, logprobs, values, rewards, batch_size):
+        batch = dict()
+
     @torch.no_grad()
-    def batched_forward_pass(self, input_ids, response_mask):
+    def batched_forward_pass(self, input_ids):
         """Calculate model outputs in batches."""
         logits = self.model(input_ids).logits
         ref_logits = self.ref_model(input_ids).logits
-
+        values = self.value_model(input_ids)
+        
         labels = input_ids.roll(-1)
-        label_mask = response_mask.roll(-1)
-
-        values = self.value_model(input_ids) * label_mask
-        logprobs = logprobs_from_logits(logits, labels) * label_mask
-        ref_logprobs = logprobs_from_logits(ref_logits, labels) * label_mask
+        logprobs = logprobs_from_logits(logits, labels)
+        ref_logprobs = logprobs_from_logits(ref_logits, labels)
         return logprobs, ref_logprobs, values
 
-    def train_minibatch(self, logprobs, values, rewards, query, response, model_input):
+    def train_minibatch(self, logprobs, values, rewards, input_ids):
         """Train one PPO minibatch"""
         loss_p, loss_v, train_stats = self.loss(
-            logprobs, values, rewards, query, response, model_input
+            logprobs, values, rewards, input_ids
         )
 
         self.optimizer.zero_grad()
@@ -210,10 +180,9 @@ class PPOTrainer:
 
         label_mask = response_mask.roll(-1)
         rewards = (kl_penalties + scores.unsqueeze(-1)) * label_mask
-        import pdb; pdb.set_trace()
         return rewards, kl_penalties
 
-    def loss(self, old_logprobs, values, rewards, query, response, model_input):
+    def loss(self, old_logprobs, values, rewards, input_ids):
         """Calculate policy and value losses."""
         lastgaelam = 0
         advantages_reversed = []

@@ -42,7 +42,7 @@ config = {
     "eval_steps": int(os.environ.get("EVAL_STEPS", 10)),
     "checkpoint_steps": int(os.environ.get("CHECKPOINT_STEPS", 30)),
     "batch_size": int(os.environ.get("BATCH_SIZE", 32)),
-    "forward_batch_size": int(os.environ.get("FORWARD_BATCH_SIZE", 16)),
+    "minibatch_size": int(os.environ.get("MINIBATCH_SIZE", 4)),
     "ppo_epochs": int(os.environ.get("PPO_EPOCHS", 4)),
     "input_size": int(os.environ.get("INPUT_SIZE", 960)),
     "output_size": int(os.environ.get("OUTPUT_SIZE", 32)),
