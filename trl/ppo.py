@@ -215,7 +215,9 @@ class PPOTrainer:
         loss_1 = ((vpreds - returns) ** 2).masked_select(label_mask.bool())
         loss_2 = ((vpreds_clipped - returns) ** 2).masked_select(label_mask.bool())
         loss = 0.5 * torch.mean(torch.max(loss_1, loss_2))
-        clipfrac = torch.mean(torch.gt(loss_2, loss_1).double())
+
+        with torch.no_grad():
+            clipfrac = torch.mean(torch.gt(loss_2, loss_1).double())
 
         return loss, clipfrac
 
@@ -232,7 +234,9 @@ class PPOTrainer:
             )
         ).masked_select(label_mask.bool())
         loss = torch.mean(torch.max(loss_1, loss_2))
-        clipfrac = torch.mean(torch.gt(loss_2, loss_1).double())
+
+        with torch.no_grad():
+            clipfrac = torch.mean(torch.gt(loss_2, loss_1).double())
 
         return loss, clipfrac
 
@@ -262,12 +266,12 @@ class PPOTrainer:
 
         stats = dict(
             policy=dict(
-                loss=pg_loss,
+                loss=pg_loss.detach(),
                 entropy=entropy,
                 clipfrac=pg_clipfrac,
             ),
             value=dict(
-                loss=vf_loss,
+                loss=vf_loss.detach(),
                 clipfrac=vf_clipfrac,
             ),
         )
