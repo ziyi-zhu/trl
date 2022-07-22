@@ -186,10 +186,10 @@ class PPOTrainer:
         return last_token_mask
 
     def estimate_advantages(self, values, rewards, response_mask):
-        next_values = values.roll(-1)
-        delta = rewards + self.ppo_params["gamma"] * next_values - values
-
         label_mask = response_mask.roll(-1)
+        next_values = (values * label_mask).roll(-1)
+
+        delta = rewards + self.ppo_params["gamma"] * next_values - values
         response_length = response_mask.sum(-1).max().item()
 
         advantages = delta * label_mask
