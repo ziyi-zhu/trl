@@ -103,10 +103,11 @@ def train_step(batch):
     batch_encoded = tokenize(batch).to(device)
     model_output, responses = get_model_responses(model, **batch_encoded)
 
-    responses = [format_response(response) for response in responses]
     output_attention_mask, response_mask = get_response_mask(
         model_output, responses, **batch_encoded
     )
+    responses = decode_responses(responses)
+    import pdb; pdb.set_trace()
 
     response_sizes = response_mask.sum(-1)
     rewards, preds = compute_rewards(batch, responses, response_sizes)
@@ -122,15 +123,28 @@ def train_step(batch):
     return logs
 
 
+def decode_responses(responses):
+    response_decoded = tokenizer.batch_decode(responses)
+    return [format_response(response) for response in response_decoded]
+
+
+def get_response_attention_mask(responses):
+    response_attention_mask = torch.ones(responses.size())
+    for row, response in enumerate(responses):
+        for token in [198, 50256]:
+            token_idx = get_token_index(response, token)
+            if token_idx != -1:
+                response_attention_mask[row, token_idx + 1:] = 0
+    return response_attention_mask
+
+
+def get_token_index(response, token):
+    indices = (response == torch.tensor(token)).nonzero().flatten()
+    return indices[0] if indices.size(0) else -1
+
+
 def get_response_mask(model_output, responses, input_ids, attention_mask):
-    response_encoded = tokenizer(
-        responses,
-        padding="max_length",
-        truncation=True,
-        max_length=model_output.size(-1) - input_ids.size(-1),
-        return_tensors="pt",
-    )
-    response_attention_mask = response_encoded.attention_mask.flip(-1)
+    response_attention_mask = get_response_attention_mask(responses)
     response_mask = torch.cat(
         [
             torch.zeros(attention_mask.size()),
@@ -216,9 +230,8 @@ def get_model_responses(model, input_ids, attention_mask):
         max_length=input_ids.size(-1) + config["output_size"],
         **gen_kwargs,
     )
-    response = output[:, input_ids.size(-1) :]
-    response_decoded = tokenizer.batch_decode(response)
-    return output, response_decoded
+    responses = output[:, input_ids.size(-1) :]
+    return output, responses
 
 
 def training_loop(dataloader):
