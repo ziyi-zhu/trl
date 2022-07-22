@@ -100,7 +100,8 @@ class PPOTrainer:
         Run a PPO optimisation step.
         """
         logprobs, ref_logprobs, values = self.batched_forward_pass(
-            input_ids, attention_mask
+            input_ids=input_ids,
+            attention_mask=attention_mask,
         )
         rewards, kl = self.compute_rewards(
             scores, logprobs, ref_logprobs, response_mask
@@ -113,12 +114,12 @@ class PPOTrainer:
             )
             for indices in batched_indices:
                 train_stats = self.train_minibatch(
-                    logprobs[indices],
-                    values[indices],
-                    rewards[indices],
-                    input_ids[indices],
-                    attention_mask[indices],
-                    response_mask[indices],
+                    logprobs=logprobs[indices],
+                    values=values[indices],
+                    rewards=rewards[indices],
+                    input_ids=input_ids[indices],
+                    attention_mask=attention_mask[indices],
+                    response_mask=response_mask[indices],
                 )
                 all_stats.append(train_stats)
         train_stats = stack_dicts(all_stats)
@@ -135,23 +136,27 @@ class PPOTrainer:
         return stats
 
     @torch.no_grad()
-    def batched_forward_pass(self, input_ids, attention_mask):
+    def batched_forward_pass(self, **batch_encoded):
         """Calculate model outputs in batches."""
-        logits = self.model(input_ids, attention_mask=attention_mask).logits
-        ref_logits = self.ref_model(input_ids, attention_mask=attention_mask).logits
-        values = self.value_model(input_ids, attention_mask=attention_mask)
+        logits = self.model(**batch_encoded).logits
+        ref_logits = self.ref_model(**batch_encoded).logits
+        values = self.value_model(**batch_encoded)
 
-        labels = input_ids.roll(-1)
+        labels = batch_encoded["input_ids"].roll(-1)
         logprobs = logprobs_from_logits(logits, labels)
         ref_logprobs = logprobs_from_logits(ref_logits, labels)
         return logprobs, ref_logprobs, values
 
     def train_minibatch(
-        self, logprobs, values, rewards, input_ids, attention_mask, response_mask
+        self, logprobs, values, rewards, response_mask, **batch_encoded
     ):
         """Train one PPO minibatch"""
         loss_p, loss_v, train_stats = self.loss(
-            logprobs, values, rewards, input_ids, attention_mask, response_mask
+            old_logprobs=logprobs,
+            values=values,
+            rewards=rewards,
+            response_mask=response_mask,
+            **batch_encoded
         )
 
         self.optimizer.zero_grad()
@@ -232,7 +237,7 @@ class PPOTrainer:
         return loss, clipfrac
 
     def loss(
-        self, old_logprobs, values, rewards, input_ids, attention_mask, response_mask
+        self, old_logprobs, values, rewards, response_mask, **batch_encoded
     ):
         """Calculate policy and value losses."""
         advantages = self.estimate_advantages(values, rewards, response_mask)
@@ -241,10 +246,10 @@ class PPOTrainer:
         returns = advantages + values
         advantages = whiten(advantages, label_mask)
 
-        logits = self.model(input_ids, attention_mask=attention_mask).logits
-        vpreds = self.value_model(input_ids, attention_mask=attention_mask)
+        logits = self.model(**batch_encoded).logits
+        vpreds = self.value_model(**batch_encoded)
 
-        labels = input_ids.roll(-1)
+        labels = batch_encoded["input_ids"].roll(-1)
         logprobs = logprobs_from_logits(logits, labels)
 
         vf_loss, vf_clipfrac = self.value_function_loss(

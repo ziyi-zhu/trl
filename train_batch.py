@@ -27,7 +27,6 @@ config = {
     "tokenizer_name": str(os.environ.get("TOKENIZER_NAME", "gpt2")),
     "vf_model_name": str(os.environ.get("VF_MODEL_NAME", "gpt2")),
     "ref_model_name": str(os.environ.get("REF_MODEL_NAME", "gpt2")),
-    "fp16": (os.environ.get("FP16", "False") == "True"),
     "cls_model_name": str(
         os.environ.get("CLS_MODEL_NAME", "ChaiML/rewardModel90kEpoch2K1M3")
     ),
@@ -36,31 +35,31 @@ config = {
     ),
     "cls_input_size": int(os.environ.get("CLS_INPUT_SIZE", 512)),
     "cls_shift": float(os.environ.get("CLS_SHIFT", 0.0)),
-    "cls_penal_coef": float(os.environ.get("CLS_PENAL_COEF", 1.2)),
+    "cls_penal_coef": float(os.environ.get("CLS_PENAL_COEF", 5.0)),
     "steps": int(os.environ.get("STEPS", 50000)),
     "epochs": int(os.environ.get("EPOCHS", 5)),
     "eval_steps": int(os.environ.get("EVAL_STEPS", 10)),
     "checkpoint_steps": int(os.environ.get("CHECKPOINT_STEPS", 30)),
     "batch_size": int(os.environ.get("BATCH_SIZE", 32)),
-    "mini_batch_size": int(os.environ.get("MINI_BATCH_SIZE", 1)),
+    "mini_batch_size": int(os.environ.get("MINI_BATCH_SIZE", 4)),
     "eval_batch_size": int(os.environ.get("EVAL_BATCH_SIZE", 32)),
     "ppo_epochs": int(os.environ.get("PPO_EPOCHS", 4)),
     "input_size": int(os.environ.get("INPUT_SIZE", 960)),
     "output_size": int(os.environ.get("OUTPUT_SIZE", 32)),
     "lr": float(os.environ.get("LR", 1e-5)),
-    "adap_kl_ctrl": (os.environ.get("ADAP_KL_CTRL", "False") == "True"),
-    "init_kl_coef": float(os.environ.get("INIT_KL_COEF", 0.2)),
+    "adap_kl_ctrl": (os.environ.get("ADAP_KL_CTRL", "True") == "True"),
+    "init_kl_coef": float(os.environ.get("INIT_KL_COEF", 0.05)),
     "target": int(os.environ.get("TARGET", 6)),
     "horizon": int(os.environ.get("HORIZON", 10000)),
-    "gamma": float(os.environ.get("GAMMA", 1.0)),
+    "gamma": float(os.environ.get("GAMMA", 0.99)),
     "lam": float(os.environ.get("LAM", 0.95)),
     "cliprange": float(os.environ.get("CLIPRANGE", 0.2)),
     "cliprange_value": float(os.environ.get("CLIPRANGE_VALUE", 0.2)),
     "init_steps": int(os.environ.get("INIT_STEPS", 0)),
     "vf_coef": float(os.environ.get("VF_COEF", 0.1)),
-    "temperature": float(os.environ.get("TEMPERATURE", 1.0)),
+    "temperature": float(os.environ.get("TEMPERATURE", 0.7)),
     "top_k": int(os.environ.get("TOP_K", 0)),
-    "top_p": float(os.environ.get("TOP_P", 1.0)),
+    "top_p": float(os.environ.get("TOP_P", 0.95)),
 }
 
 
@@ -113,10 +112,10 @@ def train_step(batch):
     rewards, preds = compute_rewards(batch, responses, response_sizes)
 
     logs = ppo_trainer.step(
-        model_output,
-        output_attention_mask.to(device),
-        response_mask.to(device),
-        rewards,
+        input_ids=model_output,
+        attention_mask=output_attention_mask.to(device),
+        response_mask=response_mask.to(device),
+        scores=rewards,
     )
 
     logs.update(get_train_logs(batch, responses, rewards, preds))
@@ -214,8 +213,8 @@ def get_model_responses(model, input_ids, attention_mask):
     output = model.generate(
         input_ids=input_ids,
         attention_mask=attention_mask,
+        max_length=input_ids.size(-1) + config["output_size"],
         **gen_kwargs,
-        max_length=input_ids.size(-1) + config["output_size"]
     )
     response = output[:, input_ids.size(-1) :]
     response_decoded = tokenizer.batch_decode(response)
