@@ -4,6 +4,5 @@ jupyterlab==2.2.10
 nbdev==0.2.16
 datasets==2.3.2
 tqdm
-transformers==4.3.2
+transformers=4.20.1
 wandb
-matplotlib==3.5.1

@@ -32,7 +32,7 @@ spec:
         - name: RUN_NAME
           value: "batch-gpt-neo-1.3B"
         - name: PROJECT_NAME
-          value: "batch_debug"
+          value: "batch-debug"
         - name: MODEL_NAME
           value: "EleutherAI/gpt-neo-1.3B"
         - name: TOKENIZER_NAME
@@ -41,10 +41,6 @@ spec:
           value: "EleutherAI/gpt-neo-1.3B"
         - name: VF_MODEL_NAME
           value: "EleutherAI/gpt-neo-125M"
-        - name: CLS_MODEL_NAME
-          value: "lvwerra/distilbert-imdb"
-        - name: CLS_TOKENIZER_NAME
-          value: "lvwerra/distilbert-imdb"
         - name: INIT_KL_COEF
           value: "0.2"
         - name: STORAGE_URI
