@@ -34,8 +34,8 @@ config = {
         os.environ.get("CLS_TOKENIZER_NAME", "roberta-large-mnli")
     ),
     "cls_input_size": int(os.environ.get("CLS_INPUT_SIZE", 512)),
-    "cls_shift": float(os.environ.get("CLS_SHIFT", 0.0)),
-    "cls_penal_coef": float(os.environ.get("CLS_PENAL_COEF", 3.0)),
+    "cls_shift": float(os.environ.get("CLS_SHIFT", -3.0)),
+    "cls_penal_coef": float(os.environ.get("CLS_PENAL_COEF", 1.2)),
     "steps": int(os.environ.get("STEPS", 50000)),
     "epochs": int(os.environ.get("EPOCHS", 5)),
     "eval_steps": int(os.environ.get("EVAL_STEPS", 10)),
@@ -175,7 +175,7 @@ def compute_rewards(batch, responses, response_sizes=None):
         for reward_input, response in zip(batch["reward_input"], responses)
     ]
     input_encoded = reward_tokenizer(
-        responses,
+        reward_inputs,
         padding=True,
         truncation=True,
         max_length=config["cls_input_size"],
