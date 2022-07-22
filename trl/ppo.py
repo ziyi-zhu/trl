@@ -109,7 +109,7 @@ class PPOTrainer:
 
         all_stats = []
         for _ in range(self.ppo_params["ppo_epochs"]):
-            batched_indices = torch.randperm(self.ppo_params["batch_size"]).view(
+            batched_indices = torch.arange(self.ppo_params["batch_size"]).view(
                 -1, self.ppo_params["mini_batch_size"]
             )
             for indices in batched_indices:
@@ -156,7 +156,7 @@ class PPOTrainer:
             values=values,
             rewards=rewards,
             response_mask=response_mask,
-            **batch_encoded
+            **batch_encoded,
         )
 
         self.optimizer.zero_grad()
@@ -236,9 +236,7 @@ class PPOTrainer:
 
         return loss, clipfrac
 
-    def loss(
-        self, old_logprobs, values, rewards, response_mask, **batch_encoded
-    ):
+    def loss(self, old_logprobs, values, rewards, response_mask, **batch_encoded):
         """Calculate policy and value losses."""
         advantages = self.estimate_advantages(values, rewards, response_mask)
 

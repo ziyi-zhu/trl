@@ -35,7 +35,7 @@ config = {
     ),
     "cls_input_size": int(os.environ.get("CLS_INPUT_SIZE", 512)),
     "cls_shift": float(os.environ.get("CLS_SHIFT", 0.0)),
-    "cls_penal_coef": float(os.environ.get("CLS_PENAL_COEF", 5.0)),
+    "cls_penal_coef": float(os.environ.get("CLS_PENAL_COEF", 3.0)),
     "steps": int(os.environ.get("STEPS", 50000)),
     "epochs": int(os.environ.get("EPOCHS", 5)),
     "eval_steps": int(os.environ.get("EVAL_STEPS", 10)),
@@ -48,7 +48,7 @@ config = {
     "output_size": int(os.environ.get("OUTPUT_SIZE", 32)),
     "lr": float(os.environ.get("LR", 1e-5)),
     "adap_kl_ctrl": (os.environ.get("ADAP_KL_CTRL", "True") == "True"),
-    "init_kl_coef": float(os.environ.get("INIT_KL_COEF", 0.05)),
+    "init_kl_coef": float(os.environ.get("INIT_KL_COEF", 0.2)),
     "target": int(os.environ.get("TARGET", 6)),
     "horizon": int(os.environ.get("HORIZON", 10000)),
     "gamma": float(os.environ.get("GAMMA", 0.99)),
@@ -262,7 +262,7 @@ def evaluate_step(batch):
         rewards=rewards,
         preds=preds,
         ref_rewards=ref_rewards,
-        ref_preds=ref_preds
+        ref_preds=ref_preds,
     )
     return logs
 
@@ -321,7 +321,9 @@ gen_kwargs = {
     "pad_token_id": tokenizer.eos_token_id,
 }
 
-value_model = GPTNeoHeadWithValueModel.from_pretrained(config["vf_model_name"]).to(device)
+value_model = GPTNeoHeadWithValueModel.from_pretrained(config["vf_model_name"]).to(
+    device
+)
 
 reward_model = AutoModelForSequenceClassification.from_pretrained(
     config["cls_model_name"], use_auth_token=config["auth_token"]
