@@ -10,15 +10,11 @@ from transformers import DataCollatorForLanguageModeling
 
 from .core import (
     logprobs_from_logits,
+    kl_divs_from_logits,
+    entropy_from_logits,
     whiten,
     clip_by_value,
-    entropy_from_logits,
-    flatten_dict,
-    average_torch_dicts,
-    stats_to_np,
     stack_dicts,
-    add_suffix,
-    WANDB_PADDING,
 )
 
 
@@ -95,20 +91,22 @@ class PPOTrainer:
         else:
             self.kl_ctl = FixedKLController(self.ppo_params["init_kl_coef"])
 
+        self.steps = 0
+
     def step(self, input_ids, attention_mask, response_mask, scores):
         """
         Run a PPO optimisation step.
         """
-        logits, ref_logits, values = self.batched_forward_pass(
+        labels = input_ids.roll(-1)
+        label_mask = response_mask.roll(-1)
+
+        logprobs, values, kl_divs = self.batched_forward_pass(
+            labels=labels,
             input_ids=input_ids,
             attention_mask=attention_mask,
         )
 
-        labels = input_ids.roll(-1)
-        logprobs, ref_logprobs, kl_divs = self.compute_logprobs(
-            labels, logits, ref_logits
-        )
-        rewards = self.compute_rewards(scores, kl_divs, response_mask)
+        rewards = self.compute_rewards(scores, kl_divs, label_mask)
 
         all_stats = []
         for _ in range(self.ppo_params["ppo_epochs"]):
@@ -122,14 +120,13 @@ class PPOTrainer:
                     rewards=rewards[indices],
                     input_ids=input_ids[indices],
                     attention_mask=attention_mask[indices],
-                    response_mask=response_mask[indices],
+                    labels=labels[indices],
+                    label_mask=label_mask[indices],
                 )
                 all_stats.append(train_stats)
         train_stats = stack_dicts(all_stats)
 
-        label_mask = response_mask.roll(-1)
-        mean_kl = (kl * label_mask).sum(-1).mean().item()
-
+        mean_kl = kl_divs.masked_select(label_mask.bool()).mean().item()
         self.kl_ctl.update(mean_kl, self.ppo_params["batch_size"])
 
         stats = self.record_step_stats(
@@ -139,34 +136,36 @@ class PPOTrainer:
         return stats
 
     @torch.no_grad()
-    def batched_forward_pass(self, **batch_encoded):
+    def batched_forward_pass(self, labels, **batch_encoded):
         """Calculate model outputs in batches."""
         logits = self.model(**batch_encoded).logits
         ref_logits = self.ref_model(**batch_encoded).logits
-        values = self.value_model(**batch_encoded).roll(1)
-        return logprobs, ref_logprobs, values
+        values = self.value_model(**batch_encoded)
 
-    def compute_logprobs(self, logits, ref_logits):
         logprobs = logprobs_from_logits(logits, labels)
         ref_logprobs = logprobs_from_logits(ref_logits, labels)
-        kl_div = logprobs - ref_logprobs
-        return logprobs, ref_logprobs, kl_div
+        kl_divs = kl_divs_from_logits(logits, ref_logits)
+        return logprobs, values, kl_divs
 
     def train_minibatch(
-        self, logprobs, values, rewards, response_mask, **batch_encoded
+        self, logprobs, values, rewards, labels, label_mask, **batch_encoded
     ):
         """Train one PPO minibatch"""
         loss_p, loss_v, train_stats = self.loss(
             old_logprobs=logprobs,
             values=values,
             rewards=rewards,
-            response_mask=response_mask,
+            labels=labels,
+            label_mask=label_mask,
             **batch_encoded,
         )
 
-        self.optimizer.zero_grad()
-        loss_p.backward()
-        self.optimizer.step()
+        if self.steps > 160:
+            self.optimizer.zero_grad()
+            loss_p.backward()
+            self.optimizer.step()
+        else:
+            self.steps += 1
 
         self.vf_optimizer.zero_grad()
         loss_v.backward()
@@ -174,26 +173,22 @@ class PPOTrainer:
 
         return train_stats
 
-    def compute_rewards(self, scores, kl_divs, response_mask):
+    def compute_rewards(self, scores, kl_divs, label_mask):
         """Compute per token rewards from scores and KL-penalty."""
-        label_mask = response_mask.roll(-1)
         last_token_mask = self.get_last_token_mask(label_mask)
-
         kl_penalties = -self.kl_ctl.value * kl_divs
-        rewards = kl_penalties + last_token_mask * scores.unsqueeze(-1)
-        return rewards
+        return kl_penalties + last_token_mask * scores.unsqueeze(-1)
 
     def get_last_token_mask(self, label_mask):
         last_token_mask = label_mask - label_mask.roll(-1)
         last_token_mask[last_token_mask < 0] = 0
         return last_token_mask
 
-    def estimate_advantages(self, values, rewards, response_mask):
-        label_mask = response_mask.roll(-1)
+    def estimate_advantages(self, values, rewards, label_mask):
         next_values = (values * label_mask).roll(-1)
 
         delta = rewards + self.ppo_params["gamma"] * next_values - values
-        response_length = response_mask.sum(-1).max().item()
+        response_length = label_mask.sum(-1).max().item()
 
         advantages = delta * label_mask
         last_advantage_estimates = advantages.clone()
@@ -243,18 +238,15 @@ class PPOTrainer:
 
         return loss, clipfrac
 
-    def loss(self, old_logprobs, values, rewards, response_mask, **batch_encoded):
+    def loss(self, old_logprobs, values, rewards, labels, label_mask, **batch_encoded):
         """Calculate policy and value losses."""
-        advantages = self.estimate_advantages(values, rewards, response_mask)
+        advantages = self.estimate_advantages(values, rewards, label_mask)
 
-        label_mask = response_mask.roll(-1)
         returns = advantages + values
         advantages = whiten(advantages, label_mask)
 
         logits = self.model(**batch_encoded).logits
-        vpreds = self.value_model(**batch_encoded).roll(1)
-
-        labels = batch_encoded["input_ids"].roll(-1)
+        vpreds = self.value_model(**batch_encoded)
         logprobs = logprobs_from_logits(logits, labels)
 
         vf_loss, vf_clipfrac = self.value_function_loss(
@@ -264,21 +256,13 @@ class PPOTrainer:
             logprobs, old_logprobs, advantages, label_mask
         )
 
-        with torch.no_grad():
-            entropy = torch.mean(entropy_from_logits(logits))
-
-        stats = dict(
-            policy=dict(
-                loss=pg_loss.detach(),
-                entropy=entropy,
-                clipfrac=pg_clipfrac,
-            ),
-            value=dict(
-                loss=vf_loss.detach(),
-                clipfrac=vf_clipfrac,
-            ),
-        )
-        return pg_loss, vf_loss, flatten_dict(stats)
+        stats = {
+            "policy/loss": pg_loss.detach().cpu(),
+            "policy/clipfrac": pg_clipfrac.cpu(),
+            "value/loss": vf_loss.detach().cpu(),
+            "value/clipfrac": vf_clipfrac.cpu(),
+        }
+        return pg_loss, self.ppo_params["vf_coef"] * vf_loss, stats
 
     def record_step_stats(self, mean_kl, train_stats):
         """Record training step statistics."""

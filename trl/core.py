@@ -86,6 +86,14 @@ def entropy_from_logits(logits):
     return -torch.sum(probs * logprobs, axis=-1)
 
 
+def kl_divs_from_logits(logits, ref_logits):
+    """Calculate entropy from logits."""
+    probs = logits.softmax(-1)
+    logprobs = logits.log_softmax(-1)
+    ref_logprobs = ref_logits.log_softmax(-1)
+    return torch.sum(probs * (logprobs - ref_logprobs), axis=-1)
+
+
 def average_torch_dicts(list_of_dicts):
     """Average values of a list of dicts wiht torch tensors."""
     average_dict = dict()
