@@ -107,7 +107,6 @@ def train_step(batch):
         model_output, responses, **batch_encoded
     )
     responses = decode_responses(responses)
-    import pdb; pdb.set_trace()
 
     response_sizes = response_mask.sum(-1)
     rewards, preds = compute_rewards(batch, responses, response_sizes)
@@ -262,8 +261,8 @@ def evaluate_step(batch):
     _, responses = get_model_responses(model, **batch_encoded)
     _, ref_responses = get_model_responses(model_ref, **batch_encoded)
 
-    responses = [format_response(response) for response in responses]
-    ref_responses = [format_response(response) for response in ref_responses]
+    responses = decode_responses(responses)
+    ref_responses = decode_responses(ref_responses)
 
     rewards, preds = compute_rewards(batch, responses)
     ref_rewards, ref_preds = compute_rewards(batch, ref_responses)
