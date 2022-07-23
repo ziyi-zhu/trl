@@ -99,13 +99,16 @@ class PPOTrainer:
         """
         Run a PPO optimisation step.
         """
-        logprobs, ref_logprobs, values = self.batched_forward_pass(
+        logits, ref_logits, values = self.batched_forward_pass(
             input_ids=input_ids,
             attention_mask=attention_mask,
         )
-        rewards, kl = self.compute_rewards(
-            scores, logprobs, ref_logprobs, response_mask
+
+        labels = input_ids.roll(-1)
+        logprobs, ref_logprobs, kl_divs = self.compute_logprobs(
+            labels, logits, ref_logits
         )
+        rewards = self.compute_rewards(scores, kl_divs, response_mask)
 
         all_stats = []
         for _ in range(self.ppo_params["ppo_epochs"]):
@@ -140,12 +143,14 @@ class PPOTrainer:
         """Calculate model outputs in batches."""
         logits = self.model(**batch_encoded).logits
         ref_logits = self.ref_model(**batch_encoded).logits
-        values = self.value_model(**batch_encoded)
+        values = self.value_model(**batch_encoded).roll(1)
+        return logprobs, ref_logprobs, values
 
-        labels = batch_encoded["input_ids"].roll(-1)
+    def compute_logprobs(self, logits, ref_logits):
         logprobs = logprobs_from_logits(logits, labels)
         ref_logprobs = logprobs_from_logits(ref_logits, labels)
-        return logprobs, ref_logprobs, values
+        kl_div = logprobs - ref_logprobs
+        return logprobs, ref_logprobs, kl_div
 
     def train_minibatch(
         self, logprobs, values, rewards, response_mask, **batch_encoded
@@ -169,16 +174,14 @@ class PPOTrainer:
 
         return train_stats
 
-    def compute_rewards(self, scores, logprobs, ref_logprobs, response_mask):
+    def compute_rewards(self, scores, kl_divs, response_mask):
         """Compute per token rewards from scores and KL-penalty."""
-        kl = logprobs - ref_logprobs
-        kl_penalties = -self.kl_ctl.value * kl
-
         label_mask = response_mask.roll(-1)
         last_token_mask = self.get_last_token_mask(label_mask)
 
+        kl_penalties = -self.kl_ctl.value * kl_divs
         rewards = kl_penalties + last_token_mask * scores.unsqueeze(-1)
-        return rewards, kl
+        return rewards
 
     def get_last_token_mask(self, label_mask):
         last_token_mask = label_mask - label_mask.roll(-1)
@@ -249,7 +252,7 @@ class PPOTrainer:
         advantages = whiten(advantages, label_mask)
 
         logits = self.model(**batch_encoded).logits
-        vpreds = self.value_model(**batch_encoded)
+        vpreds = self.value_model(**batch_encoded).roll(1)
 
         labels = batch_encoded["input_ids"].roll(-1)
         logprobs = logprobs_from_logits(logits, labels)
